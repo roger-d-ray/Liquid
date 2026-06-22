@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -71,15 +72,17 @@ class Proposal:
 @dataclass
 class ValidationResult:
     approved:         bool
-    adjusted:         bool         = False
-    confidence:       float        = 0.0
-    warnings:         list[str]    = field(default_factory=list)
+    adjusted:         bool          = False
+    confidence:       float         = 0.0
+    warnings:         list[str]     = field(default_factory=list)
     rejection_reason: Optional[str] = None
-    adjustments:      dict         = field(default_factory=dict)
-    final_entry:      float        = 0.0
-    final_target:     float        = 0.0
-    final_stop:       float        = 0.0
-    risk_reward:      float        = 0.0
+    adjustments:      dict          = field(default_factory=dict)
+    final_entry:      float         = 0.0
+    final_target:     float         = 0.0
+    final_stop:       float         = 0.0
+    risk_reward:      float         = 0.0
+    original:         dict          = field(default_factory=dict)
+    validated:        Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {
@@ -93,6 +96,8 @@ class ValidationResult:
             "final_target":     self.final_target,
             "final_stop":       self.final_stop,
             "risk_reward":      round(self.risk_reward, 2),
+            "original":         self.original,
+            "validated":        self.validated,
         }
 
 
@@ -452,7 +457,14 @@ def _validate_momentum(p: Proposal, r: ValidationResult) -> bool:
     return True
 
 
-# ─── Router ───────────────────────────────────────────────────────────────────
+# ─── Portfolio limits ─────────────────────────────────────────────────────────
+
+MAX_OPEN_POSITIONS       = 3
+MAX_TOTAL_EXPOSURE_PCT   = 0.60   # 60% of portfolio
+MAX_PER_ASSET_EXPOSURE_PCT = 0.30 # 30% per asset
+
+
+# ─── RiskManager ──────────────────────────────────────────────────────────────
 
 _STRATEGY_VALIDATORS = {
     "range-trading":    _validate_range,
@@ -461,28 +473,119 @@ _STRATEGY_VALIDATORS = {
 }
 
 
+class RiskManager:
+    _PORTFOLIO_PATH = Path(__file__).parent / "data" / "portfolio_state.json"
+    _LOG_PATH       = Path(__file__).parent / "logs" / "proposals.jsonl"
+
+    def __init__(self):
+        self._portfolio = self._load_portfolio()
+
+    def _load_portfolio(self) -> dict:
+        if self._PORTFOLIO_PATH.exists():
+            try:
+                return json.loads(self._PORTFOLIO_PATH.read_text())
+            except Exception:
+                pass
+        return {"positions": [], "total_equity": None}
+
+    def _log(self, result: ValidationResult) -> None:
+        self._LOG_PATH.parent.mkdir(exist_ok=True)
+        entry = {"timestamp": datetime.now(timezone.utc).isoformat(), **result.to_dict()}
+        with self._LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def _validate_portfolio(self, p: Proposal, r: ValidationResult) -> bool:
+        positions = self._portfolio.get("positions", [])
+
+        if len(positions) >= MAX_OPEN_POSITIONS:
+            r.rejection_reason = (
+                f"Portfolio limit: {len(positions)} open position(s) already "
+                f"(max {MAX_OPEN_POSITIONS}). Close one before opening another."
+            )
+            return False
+
+        for pos in positions:
+            if pos.get("asset") == p.asset and pos.get("signal") != p.signal:
+                r.rejection_reason = (
+                    f"Conflicting positions: cannot open {p.signal} on {p.asset} "
+                    f"while a {pos['signal']} position is already open."
+                )
+                return False
+
+        equity = self._portfolio.get("total_equity")
+        if equity:
+            asset_exposure = sum(
+                pos.get("notional", 0) for pos in positions if pos.get("asset") == p.asset
+            )
+            total_exposure = sum(pos.get("notional", 0) for pos in positions)
+            if asset_exposure / equity >= MAX_PER_ASSET_EXPOSURE_PCT:
+                r.rejection_reason = (
+                    f"Per-asset exposure limit: {p.asset} already at "
+                    f"{asset_exposure/equity*100:.1f}% of equity "
+                    f"(max {MAX_PER_ASSET_EXPOSURE_PCT*100:.0f}%)."
+                )
+                return False
+            if total_exposure / equity >= MAX_TOTAL_EXPOSURE_PCT:
+                r.rejection_reason = (
+                    f"Total exposure limit: portfolio already at "
+                    f"{total_exposure/equity*100:.1f}% (max {MAX_TOTAL_EXPOSURE_PCT*100:.0f}%)."
+                )
+                return False
+
+        return True
+
+    def validate(self, proposal: dict | Proposal) -> ValidationResult:
+        if isinstance(proposal, dict):
+            raw = proposal.copy()
+            p   = Proposal.from_dict(proposal)
+        else:
+            p   = proposal
+            raw = {f: getattr(p, f) for f in p.__dataclass_fields__}
+
+        r = ValidationResult(approved=False, confidence=p.confidence, original=raw)
+
+        if p.signal == "no_trade":
+            r.approved = True
+            r.warnings.append("Signal is no_trade — no position to validate.")
+            self._log(r)
+            return r
+
+        if not _validate_universal(p, r):
+            self._log(r)
+            return r
+
+        if not self._validate_portfolio(p, r):
+            self._log(r)
+            return r
+
+        validator = _STRATEGY_VALIDATORS.get(p.strategy)
+        if validator is None:
+            r.rejection_reason = f"Unknown strategy '{p.strategy}'."
+            self._log(r)
+            return r
+
+        if not validator(p, r):
+            self._log(r)
+            return r
+
+        r.approved  = True
+        r.validated = {
+            "strategy":    p.strategy,
+            "asset":       p.asset,
+            "signal":      p.signal,
+            "timeframe":   p.timeframe,
+            "entry":       r.final_entry,
+            "target":      r.final_target,
+            "stop_loss":   r.final_stop,
+            "risk_reward": r.risk_reward,
+        }
+        self._log(r)
+        return r
+
+
 def validate(proposal: dict | Proposal) -> ValidationResult:
-    p = Proposal.from_dict(proposal) if isinstance(proposal, dict) else proposal
-    r = ValidationResult(approved=False, confidence=p.confidence)
-
-    if p.signal == "no_trade":
-        r.approved = True
-        r.warnings.append("Signal is no_trade — no position to validate.")
-        return r
-
-    if not _validate_universal(p, r):
-        return r
-
-    validator = _STRATEGY_VALIDATORS.get(p.strategy)
-    if validator is None:
-        r.rejection_reason = f"Unknown strategy '{p.strategy}'."
-        return r
-
-    if not validator(p, r):
-        return r
-
-    r.approved = True
-    return r
+    """Module-level convenience wrapper around RiskManager.validate()."""
+    return RiskManager().validate(proposal)
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
@@ -492,7 +595,7 @@ def main():
         print("Usage: python risk_manager.py <proposal.json>")
         sys.exit(1)
     proposal = json.loads(Path(sys.argv[1]).read_text())
-    result   = validate(proposal)
+    result   = RiskManager().validate(proposal)
     print(json.dumps(result.to_dict(), indent=2))
     sys.exit(0 if result.approved else 1)
 

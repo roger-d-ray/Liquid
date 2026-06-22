@@ -11,6 +11,7 @@ Output: data/market_data.json
 import json
 import math
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,10 +35,16 @@ BINANCE_FUT_DATA = "https://fapi.binance.com/futures/data"
 
 # ─── HTTP ─────────────────────────────────────────────────────────────────────
 
-def http_get(url: str):
+def http_get(url: str, retries: int = 3):
     req = urllib.request.Request(url, headers={"User-Agent": "liquid-bot/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.loads(r.read())
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read())
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt == retries - 1:
+                raise
+            time.sleep(2 ** attempt)
 
 
 # ─── Binance fetchers ─────────────────────────────────────────────────────────

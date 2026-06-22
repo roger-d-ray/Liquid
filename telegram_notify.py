@@ -1,29 +1,38 @@
 """
 telegram_notify.py
-Sends a trade proposal to Telegram and waits for user approval.
+Sends trade proposals to Telegram and waits for user approval.
 
 Env vars required:
   TELEGRAM_BOT_TOKEN  — bot token from BotFather
   TELEGRAM_CHAT_ID    — target chat/user ID
-
-Returns:
-  True   if the user replies with "accetta", "si", "ok", or "yes"
-  False  on any other reply or after WAIT_SECONDS timeout
 """
 
 import json
 import os
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import datetime
 
-WAIT_SECONDS   = 30 * 60   # 30 minutes
-POLL_INTERVAL  = 5         # seconds between getUpdates calls
-ACCEPT_WORDS   = {"accetta", "si", "sì", "ok", "yes"}
+WAIT_SECONDS  = 30 * 60   # default timeout
+POLL_TIMEOUT  = 30        # seconds per getUpdates long-poll
+MAX_RETRIES   = 3
+ACCEPT_WORDS  = {"accetta", "si", "sì", "ok", "yes", "y"}
 
-# ─── Telegram API ──────────────────────────────────────────────────────────────
+
+# ─── Credentials ──────────────────────────────────────────────────────────────
+
+def _creds() -> tuple[str, str]:
+    token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID",   "").strip()
+    if not token or not chat_id:
+        raise EnvironmentError(
+            "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set as environment variables."
+        )
+    return token, chat_id
+
+
+# ─── HTTP with retry ──────────────────────────────────────────────────────────
 
 def _api(token: str, method: str, payload: dict = None):
     url  = f"https://api.telegram.org/bot{token}/{method}"
@@ -34,15 +43,23 @@ def _api(token: str, method: str, payload: dict = None):
         headers={"Content-Type": "application/json", "User-Agent": "liquid-bot/1.0"},
         method="POST" if data else "GET",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Telegram {method} HTTP {e.code}: {e.read().decode()}") from e
+    last_exc = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"Telegram {method} HTTP {e.code}: {e.read().decode()}") from e
+        except (urllib.error.URLError, TimeoutError) as e:
+            last_exc = e
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(2 ** attempt)
+    raise RuntimeError(f"Telegram {method} failed after {MAX_RETRIES} attempts: {last_exc}")
 
 
-def _send(token: str, chat_id: str, text: str) -> int:
-    """Send a message; returns message_id."""
+# ─── Low-level helpers ────────────────────────────────────────────────────────
+
+def _do_send(token: str, chat_id: str, text: str) -> int:
     res = _api(token, "sendMessage", {
         "chat_id":    chat_id,
         "text":       text,
@@ -52,118 +69,175 @@ def _send(token: str, chat_id: str, text: str) -> int:
 
 
 def _latest_offset(token: str) -> int:
-    """Return offset = last update_id + 1, so old messages are skipped."""
-    res = _api(token, "getUpdates", {"limit": 100, "timeout": 0})
+    res     = _api(token, "getUpdates", {"limit": 100, "timeout": 0})
     updates = res.get("result", [])
-    if not updates:
-        return 0
-    return updates[-1]["update_id"] + 1
+    return updates[-1]["update_id"] + 1 if updates else 0
 
 
-def _poll(token: str, chat_id: str, offset: int, deadline: float):
+# ─── Public API ───────────────────────────────────────────────────────────────
+
+def send_message(text: str) -> None:
+    """Send a plain text message (errors, status updates, etc.)."""
+    token, chat_id = _creds()
+    _do_send(token, chat_id, text)
+
+
+def send_proposal(proposal: dict) -> None:
     """
-    Long-poll getUpdates until deadline.
-    Yields (text, new_offset) for each message from chat_id.
+    Send a formatted trade proposal message.
+
+    Expected proposal keys: asset, strategy, signal, timeframe,
+    entry, target, stop_loss, leverage, confidence, risk_reward,
+    motivation (optional 1-line reason).
     """
+    token, chat_id = _creds()
+    side_emoji = "🟢" if proposal.get("signal") == "long" else "🔴"
+    rr   = proposal.get("risk_reward") or proposal.get("rr")
+    rr_str = f"{rr:.2f}" if rr is not None else "—"
+    conf_str = f"{round(proposal.get('confidence', 0) * 100, 1)}%"
+    motivation = proposal.get("motivation") or proposal.get("reason") or ""
+
+    lines = [
+        f"🔔 *Liquid Bot — Nuova Proposta* {side_emoji}",
+        "",
+        f"*Strategia:*  {proposal.get('strategy', '?')}",
+        f"*Asset:*      {proposal.get('asset', '?')}",
+        f"*Side:*       {proposal.get('signal', '?').upper()}",
+        f"*Timeframe:*  {proposal.get('timeframe', '?')}",
+        "",
+        f"*Entry:*      {proposal.get('entry', '?')}",
+        f"*Take Profit:* {proposal.get('target', '?')}",
+        f"*Stop Loss:*  {proposal.get('stop_loss', '?')}",
+        f"*Leverage:*   {proposal.get('leverage', 1)}x",
+        "",
+        f"*Confidence:* {conf_str}",
+        f"*Risk/Reward:* {rr_str}",
+    ]
+    if motivation:
+        lines += ["", f"_{motivation}_"]
+    lines += [
+        "",
+        "Rispondi *accetta* / *ok* / *yes* per approvare.",
+        "Qualsiasi altra risposta o silenzio entro 30 min = rifiuto.",
+    ]
+    _do_send(token, chat_id, "\n".join(lines))
+
+
+def wait_response(timeout_minutes: int = 30) -> bool:
+    """
+    Poll for a user reply. Returns True if the user accepts, False on
+    timeout or any other reply. Polls every ~30 seconds via long-polling.
+    """
+    token, chat_id = _creds()
+    offset   = _latest_offset(token)
+    deadline = time.time() + timeout_minutes * 60
+
+    print(f"[telegram] In attesa di risposta (max {timeout_minutes} min)...")
+
     while time.time() < deadline:
-        remaining = int(deadline - time.time())
-        if remaining <= 0:
+        remaining  = int(deadline - time.time())
+        poll_secs  = min(remaining, POLL_TIMEOUT)
+        if poll_secs <= 0:
             break
-        long_poll = min(remaining, 20)   # Telegram max long-poll = 20s
+
         try:
             res = _api(token, "getUpdates", {
                 "offset":          offset,
-                "timeout":         long_poll,
+                "timeout":         poll_secs,
                 "allowed_updates": ["message"],
             })
-        except Exception:
-            time.sleep(POLL_INTERVAL)
+        except Exception as e:
+            print(f"[telegram] Errore polling: {e}. Riprovo...")
+            time.sleep(5)
             continue
 
         for upd in res.get("result", []):
             offset = upd["update_id"] + 1
             msg    = upd.get("message", {})
-            if str(msg.get("chat", {}).get("id", "")) == str(chat_id):
-                yield msg.get("text", "").strip(), offset
+            if str(msg.get("chat", {}).get("id", "")) != str(chat_id):
+                continue
+            text = msg.get("text", "").strip()
+            word = text.lower().strip(".,!? ")
+            if word in ACCEPT_WORDS:
+                print(f"[telegram] ACCETTATO (risposta: '{text}')")
+                _do_send(token, chat_id, "✅ Trade approvato. Esecuzione in corso...")
+                return True
+            else:
+                print(f"[telegram] RIFIUTATO (risposta: '{text}')")
+                _do_send(token, chat_id, "❌ Trade rifiutato.")
+                return False
 
-    return
-
-
-# ─── Public API ────────────────────────────────────────────────────────────────
-
-def build_message(proposal: dict) -> str:
-    """Format a human-readable trade proposal message."""
-    side_emoji = "🟢" if proposal.get("signal") == "long" else "🔴"
-    lines = [
-        f"*Liquid Trading Bot — Nuova Proposta* {side_emoji}",
-        "",
-        f"*Asset:*      {proposal.get('asset', '?')}",
-        f"*Strategia:*  {proposal.get('strategy', '?')}",
-        f"*Timeframe:*  {proposal.get('timeframe', '?')}",
-        f"*Side:*       {proposal.get('signal', '?').upper()}",
-        f"*Entry:*      {proposal.get('entry', '?')}",
-        f"*Take Profit:* {proposal.get('target', '?')}",
-        f"*Stop Loss:*  {proposal.get('stop_loss', '?')}",
-        f"*Leverage:*   {proposal.get('leverage', 1)}x",
-        f"*Confidence:* {round(proposal.get('confidence', 0) * 100, 1)}%",
-        "",
-        f"Rispondi *accetta* / *ok* / *yes* per approvare.",
-        f"Qualsiasi altra risposta o silenzio entro 30 min = rifiuto.",
-    ]
-    return "\n".join(lines)
-
-
-def notify_and_wait(proposal: dict) -> bool:
-    """
-    Send the trade proposal to Telegram and wait for approval.
-
-    Args:
-        proposal: dict with keys: asset, strategy, signal, timeframe,
-                  entry, target, stop_loss, leverage, confidence.
-
-    Returns:
-        True  — user replied with an accept word
-        False — rejected or timed out
-    """
-    token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID",   "").strip()
-
-    if not token or not chat_id:
-        raise EnvironmentError(
-            "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set as environment variables."
-        )
-
-    offset   = _latest_offset(token)
-    message  = build_message(proposal)
-    deadline = time.time() + WAIT_SECONDS
-
-    _send(token, chat_id, message)
-    print(f"[telegram] Messaggio inviato. In attesa di risposta (max 30 min)...")
-
-    for text, offset in _poll(token, chat_id, offset, deadline):
-        word = text.lower().strip(".,!? ")
-        if word in ACCEPT_WORDS:
-            print(f"[telegram] Proposta ACCETTATA (risposta: '{text}')")
-            _send(token, chat_id, "✅ Trade approvato. Esecuzione in corso...")
-            return True
-        else:
-            print(f"[telegram] Proposta RIFIUTATA (risposta: '{text}')")
-            _send(token, chat_id, "❌ Trade rifiutato.")
-            return False
-
-    print("[telegram] Timeout: nessuna risposta entro 30 minuti. Proposta annullata.")
-    _send(token, chat_id, "⏰ Nessuna risposta ricevuta. Trade annullato.")
+    print("[telegram] Timeout: nessuna risposta. Proposta annullata.")
+    _do_send(token, chat_id, "⏰ Nessuna risposta ricevuta. Trade annullato.")
     return False
 
 
+def notify_and_wait(proposal: dict, timeout_minutes: int = 30) -> bool:
+    """Convenience: send_proposal + wait_response in one call."""
+    send_proposal(proposal)
+    return wait_response(timeout_minutes)
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
+
+_TEST_PROPOSAL = {
+    "strategy":    "momentum-trading",
+    "asset":       "BTC",
+    "signal":      "long",
+    "timeframe":   "1h",
+    "entry":       67_420.0,
+    "target":      71_000.0,
+    "stop_loss":   65_800.0,
+    "leverage":    2,
+    "confidence":  0.72,
+    "risk_reward": 2.21,
+    "motivation":  "Breakout sopra 20-day high con volume 1.4x — RSI 63, MACD positivo.",
+}
 
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
         print("Usage: python telegram_notify.py <proposal.json>")
+        print("       python telegram_notify.py --test")
         sys.exit(1)
+
+    if sys.argv[1] == "--test":
+        sys.stdout.reconfigure(encoding="utf-8")
+        prop = _TEST_PROPOSAL
+        print("=== MODALITÀ TEST — messaggio che verrà inviato ===")
+        # Build and print the message locally without sending
+        side_emoji = "🟢" if prop.get("signal") == "long" else "🔴"
+        rr     = prop.get("risk_reward")
+        rr_str = f"{rr:.2f}" if rr is not None else "—"
+        conf   = f"{round(prop.get('confidence', 0) * 100, 1)}%"
+        mot    = prop.get("motivation", "")
+        lines  = [
+            f"🔔 Liquid Bot — Nuova Proposta {side_emoji}",
+            f"Strategia:   {prop['strategy']}",
+            f"Asset:       {prop['asset']}",
+            f"Side:        {prop['signal'].upper()}",
+            f"Timeframe:   {prop['timeframe']}",
+            f"Entry:       {prop['entry']}",
+            f"Take Profit: {prop['target']}",
+            f"Stop Loss:   {prop['stop_loss']}",
+            f"Leverage:    {prop['leverage']}x",
+            f"Confidence:  {conf}",
+            f"Risk/Reward: {rr_str}",
+        ]
+        if mot:
+            lines.append(f"Motivazione: {mot}")
+        print("\n".join(lines))
+        print("===================================================")
+
+        token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        chat  = os.environ.get("TELEGRAM_CHAT_ID",   "").strip()
+        if token and chat:
+            print("\nEnv vars trovate — invio messaggio reale a Telegram...")
+            notify_and_wait(prop, timeout_minutes=2)
+        else:
+            print("\nTELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID non settate — solo anteprima locale.")
+        sys.exit(0)
 
     with open(sys.argv[1]) as f:
         prop = json.load(f)
