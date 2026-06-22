@@ -46,7 +46,7 @@ def _api(token: str, method: str, payload: dict = None):
     last_exc = None
     for attempt in range(MAX_RETRIES):
         try:
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with urllib.request.urlopen(req, timeout=POLL_TIMEOUT + 10) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
             raise RuntimeError(f"Telegram {method} HTTP {e.code}: {e.read().decode()}") from e
