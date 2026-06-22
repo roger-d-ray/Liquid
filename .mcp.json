@@ -1,11 +1,9 @@
 {
   "mcpServers": {
-    "claude_ai_Co-Invest": {
-      "type": "sse",
-      "url": "https://mcp.coinvest.ai/sse",
-      "headers": {
-        "Authorization": "Bearer ${CO_INVEST_API_KEY}"
-      }
+    "coinvest": {
+      "type": "url",
+      "url": "https://coinvest.liquid.trade",
+      "name": "Co-Invest"
     }
   }
 }
