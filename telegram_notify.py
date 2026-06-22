@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime
+from pathlib import Path
 
 WAIT_SECONDS  = 30 * 60   # default timeout
 POLL_TIMEOUT  = 30        # seconds per getUpdates long-poll
@@ -22,7 +23,21 @@ ACCEPT_WORDS  = {"accetta", "si", "sì", "ok", "yes", "y"}
 
 # ─── Credentials ──────────────────────────────────────────────────────────────
 
+def _load_dotenv():
+    if os.environ.get("TELEGRAM_BOT_TOKEN"):
+        return
+    env_path = Path(__file__).parent / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+
 def _creds() -> tuple[str, str]:
+    _load_dotenv()
     token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID",   "").strip()
     if not token or not chat_id:
@@ -201,6 +216,13 @@ if __name__ == "__main__":
         print("Usage: python telegram_notify.py <proposal.json>")
         print("       python telegram_notify.py --test")
         sys.exit(1)
+
+    if sys.argv[1] == "--message":
+        if len(sys.argv) < 3:
+            print("Usage: python telegram_notify.py --message \"text\"")
+            sys.exit(1)
+        send_message(sys.argv[2])
+        sys.exit(0)
 
     if sys.argv[1] == "--test":
         sys.stdout.reconfigure(encoding="utf-8")
