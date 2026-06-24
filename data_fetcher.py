@@ -1,8 +1,11 @@
 """
 data_fetcher.py
-Fetches OHLCV from Binance public API and computes all technical indicators
-needed by the three trading skills (range-trading, trend-following, momentum-trading).
-Funding rate / OI / L-S ratio come from Binance Futures public endpoints.
+Fetches OHLCV from the Coinbase Exchange public API and computes all technical
+indicators needed by the three trading skills (range-trading, trend-following,
+momentum-trading).
+Funding rate / OI / L-S ratio still come from Binance Futures public endpoints
+(out of scope of the OHLCV migration; live data is normally enriched via the
+Co-Invest MCP).
 news and unusual_activity are left as empty lists — fill them via Co-Invest MCP.
 
 Output: data/market_data.json
@@ -12,22 +15,38 @@ import json
 import math
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
 ASSETS = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT"}
 
+# Timeframes expressed as Coinbase granularities (seconds). Coinbase supports
+# only {60, 300, 900, 3600, 21600, 86400}; 4h (14400) has no native granularity
+# and is aggregated automatically from 1h candles (see fetch_ohlcv).
 TIMEFRAME_CONFIG = {
-    "1m":  {"interval": "1m",  "limit": 100},
-    "15m": {"interval": "15m", "limit": 100},
-    "1h":  {"interval": "1h",  "limit": 200},
-    "4h":  {"interval": "4h",  "limit": 100},
-    "1d":  {"interval": "1d",  "limit": 60},
+    "1m":  {"granularity": 60,    "limit": 100},
+    "15m": {"granularity": 900,   "limit": 100},
+    "1h":  {"granularity": 3600,  "limit": 200},
+    "4h":  {"granularity": 14400, "limit": 100},
+    "1d":  {"granularity": 86400, "limit": 60},
 }
 
+# ─── Coinbase OHLCV (public, no auth) ────────────────────────────────────────
+# The market-data candles endpoint is public: do NOT send COINBASE_API_KEY here.
+
+COINBASE_BASE = "https://api.exchange.coinbase.com"
+COINBASE_PRODUCTS = {"BTC": "BTC-USD", "ETH": "ETH-USD", "SOL": "SOL-USD"}
+COINBASE_GRANULARITIES = {60, 300, 900, 3600, 21600, 86400}
+COINBASE_MAX_CANDLES = 300  # hard limit per request
+
+# Legacy Binance OHLCV endpoint — replaced by Coinbase, kept commented for ref.
+# BINANCE_SPOT = "https://api.binance.com/api/v3"
+
+# Binance Futures endpoints (funding / OI / L-S ratio) — NOT OHLCV, out of scope.
 BINANCE_SPOT    = "https://api.binance.com/api/v3"
 BINANCE_FUT     = "https://fapi.binance.com/fapi/v1"
 BINANCE_FUT_DATA = "https://fapi.binance.com/futures/data"
@@ -47,21 +66,131 @@ def http_get(url: str, retries: int = 3):
             time.sleep(2 ** attempt)
 
 
-# ─── Binance fetchers ─────────────────────────────────────────────────────────
+# ─── Coinbase OHLCV fetcher ───────────────────────────────────────────────────
 
-def fetch_klines(symbol: str, interval: str, limit: int) -> list:
-    url = f"{BINANCE_SPOT}/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    return [
-        {
-            "open_time": k[0],
-            "open":   float(k[1]),
-            "high":   float(k[2]),
-            "low":    float(k[3]),
-            "close":  float(k[4]),
-            "volume": float(k[5]),
-        }
-        for k in http_get(url)
-    ]
+def _coinbase_candles(product_id: str, granularity: int,
+                      start: datetime, end: datetime, retries: int = 3) -> list:
+    """Single Coinbase /candles request with retry+backoff on 429/5xx.
+
+    Returns the raw array as Coinbase sends it: newest-first rows of
+    [time, low, high, open, close, volume].
+    """
+    params = urllib.parse.urlencode({
+        "granularity": granularity,
+        "start": start.isoformat(),
+        "end":   end.isoformat(),
+    })
+    url = f"{COINBASE_BASE}/products/{product_id}/candles?{params}"
+    req = urllib.request.Request(url, headers={"User-Agent": "liquid-bot/1.0"})
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            transient = e.code == 429 or 500 <= e.code < 600
+            if transient and attempt < retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise RuntimeError(
+                f"Coinbase OHLCV {product_id} (gran={granularity}s): "
+                f"HTTP {e.code} {e.reason}"
+            ) from e
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise RuntimeError(
+                f"Coinbase OHLCV {product_id} (gran={granularity}s): "
+                f"errore di rete: {e}"
+            ) from e
+
+
+def _resample_plan(granularity_seconds: int):
+    """For a non-native granularity, pick the largest native granularity that
+    divides it. Returns (base_granularity, factor). Used for 4h (-> 1h x4)."""
+    for base in sorted(COINBASE_GRANULARITIES, reverse=True):
+        if granularity_seconds > base and granularity_seconds % base == 0:
+            return base, granularity_seconds // base
+    raise ValueError(
+        f"Granularità {granularity_seconds}s non supportata da Coinbase "
+        f"e non aggregabile da una granularità nativa"
+    )
+
+
+def _aggregate(base_candles: list, target_seconds: int) -> list:
+    """Aggregate ascending base candles into buckets of `target_seconds`,
+    aligned to the UTC epoch (OHLC = first open, max high, min low, last close,
+    summed volume)."""
+    buckets: dict = {}
+    for c in base_candles:
+        ts = c["open_time"] // 1000
+        key = ts - (ts % target_seconds)
+        b = buckets.get(key)
+        if b is None:
+            buckets[key] = {
+                "open_time": key * 1000,
+                "open":   c["open"],
+                "high":   c["high"],
+                "low":    c["low"],
+                "close":  c["close"],
+                "volume": c["volume"],
+            }
+        else:
+            b["high"]    = max(b["high"], c["high"])
+            b["low"]     = min(b["low"],  c["low"])
+            b["close"]   = c["close"]
+            b["volume"] += c["volume"]
+    return [buckets[k] for k in sorted(buckets)]
+
+
+def fetch_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list:
+    """Fetch `num_candles` OHLCV candles from Coinbase for `symbol` (BTC/ETH/SOL).
+
+    Handles Coinbase's 300-candle-per-request limit via automatic pagination,
+    reverses Coinbase's newest-first ordering, and returns a chronological
+    (oldest→newest) list of dicts with the same schema used across the bot:
+    {open_time(ms), open, high, low, close, volume}.
+
+    Non-native granularities (e.g. 4h = 14400s) are aggregated from the largest
+    native granularity that divides them.
+    """
+    if granularity_seconds not in COINBASE_GRANULARITIES:
+        base, factor = _resample_plan(granularity_seconds)
+        base_candles = fetch_ohlcv(symbol, base, num_candles * factor)
+        return _aggregate(base_candles, granularity_seconds)[-num_candles:]
+
+    product_id = COINBASE_PRODUCTS.get(symbol, symbol)
+    collected: dict = {}                      # ts(seconds) -> candle dict (dedup)
+    end = datetime.now(timezone.utc)
+    window = timedelta(seconds=granularity_seconds * COINBASE_MAX_CANDLES)
+    max_pages = math.ceil(num_candles / COINBASE_MAX_CANDLES) + 2  # safety cap
+
+    for _ in range(max_pages):
+        if len(collected) >= num_candles:
+            break
+        start = end - window
+        raw = _coinbase_candles(product_id, granularity_seconds, start, end)
+        if not raw:
+            break
+        # Coinbase rows: [time, low, high, open, close, volume], newest-first.
+        for row in raw:
+            ts = int(row[0])
+            collected[ts] = {
+                "open_time": ts * 1000,        # ms, matching the old schema
+                "open":   float(row[3]),
+                "high":   float(row[2]),
+                "low":    float(row[1]),
+                "close":  float(row[4]),
+                "volume": float(row[5]),
+            }
+        oldest = min(int(row[0]) for row in raw)
+        end = datetime.fromtimestamp(oldest, tz=timezone.utc) \
+            - timedelta(seconds=granularity_seconds)
+        time.sleep(0.2)  # respect Coinbase public rate limit (~10 req/s)
+
+    # Reverse to chronological order and trim to the requested count.
+    candles = [collected[k] for k in sorted(collected)]
+    return candles[-num_candles:]
 
 
 def fetch_spot(symbol: str) -> dict:
@@ -339,7 +468,7 @@ def main():
         for tf, cfg in TIMEFRAME_CONFIG.items():
             print(f"  {tf} ({cfg['limit']} candles)...", end=" ", flush=True)
             try:
-                candles = fetch_klines(symbol, cfg["interval"], cfg["limit"])
+                candles = fetch_ohlcv(asset, cfg["granularity"], cfg["limit"])
                 asset_data["timeframes"][tf] = candles
                 asset_data["indicators"][tf] = compute_indicators(candles)
                 print("ok")
@@ -347,7 +476,7 @@ def main():
                 print(f"ERROR: {e}")
                 asset_data["timeframes"][tf] = []
                 asset_data["indicators"][tf] = {}
-            time.sleep(0.1)  # respect Binance rate limit
+            time.sleep(0.1)  # respect Coinbase rate limit
 
         print("  live + futures...", end=" ", flush=True)
         try:
