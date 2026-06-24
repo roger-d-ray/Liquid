@@ -2,7 +2,7 @@
 
 ## Obiettivo
 
-Bot quantitativo crypto che analizza BTC, ETH e SOL ogni 15min.
+Bot quantitativo crypto che analizza BTC, ETH e SOL ogni 60min.
 Identifica opportunità con le 3 skill in skills/.
 Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 
