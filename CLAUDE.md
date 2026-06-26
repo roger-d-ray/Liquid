@@ -26,8 +26,9 @@ Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 ## Stack
 
 - Python 3.11+, requests, pandas, numpy, python-telegram-bot
-- Dati storici: Binance klines API (gratuita, no auth)
-- Dati live: Co-Invest MCP (prezzo, funding, OI, positioning)
+- Dati storici (OHLCV): Coinbase Exchange API (gratuita, no auth) — 4h aggregato da 1h
+- Funding / OI / long-short ratio: Binance Futures API (gratuita, no auth)
+- Dati live aggiuntivi (positioning, news, unusual): Co-Invest MCP
 - Trading: Co-Invest suggest_trade() dopo approvazione utente
 
 ## Formato JSON proposta (standard tra skill e risk_manager)

@@ -252,6 +252,7 @@ if __name__ == "__main__":
         print("\n".join(lines))
         print("===================================================")
 
+        _load_dotenv()  # honor credentials stored in .env, not just shell env
         token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
         chat  = os.environ.get("TELEGRAM_CHAT_ID",   "").strip()
         if token and chat:
