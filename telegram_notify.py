@@ -2,6 +2,12 @@
 telegram_notify.py
 Sends trade proposals to Telegram and waits for user approval.
 
+Robust against HTTP 409 (Conflict): Telegram allows only one consumer of a bot's
+update stream at a time, so a leftover webhook or a second polling process makes
+getUpdates fail with 409. This module recovers autonomously by calling
+deleteWebhook(drop_pending_updates) before polling and again on every 409, then
+retrying with backoff — no manual intervention needed.
+
 Env vars required:
   TELEGRAM_BOT_TOKEN  — bot token from BotFather
   TELEGRAM_CHAT_ID    — target chat/user ID
@@ -49,7 +55,26 @@ def _creds() -> tuple[str, str]:
 
 # ─── HTTP with retry ──────────────────────────────────────────────────────────
 
-def _api(token: str, method: str, payload: dict = None):
+# HTTP statuses worth retrying instead of failing hard:
+#   409 = Conflict  -> another webhook/getUpdates is holding the update stream
+#   429 = rate limit, 5xx = transient server errors
+_TRANSIENT_STATUS = {409, 429, 500, 502, 503, 504}
+
+
+def _retry_after(body: str, attempt: int) -> int:
+    """Seconds to wait before retrying: honor Telegram's `retry_after` when
+    present (429), otherwise capped exponential backoff."""
+    try:
+        ra = json.loads(body).get("parameters", {}).get("retry_after")
+        if ra:
+            return int(ra) + 1
+    except Exception:
+        pass
+    return min(2 ** attempt, 10)
+
+
+def _api(token: str, method: str, payload: dict = None, *,
+         clear_on_conflict: bool = True):
     url  = f"https://api.telegram.org/bot{token}/{method}"
     data = json.dumps(payload or {}).encode() if payload else None
     req  = urllib.request.Request(
@@ -64,12 +89,35 @@ def _api(token: str, method: str, payload: dict = None):
             with urllib.request.urlopen(req, timeout=POLL_TIMEOUT + 10) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
-            raise RuntimeError(f"Telegram {method} HTTP {e.code}: {e.read().decode()}") from e
+            body = e.read().decode(errors="replace")
+            if e.code in _TRANSIENT_STATUS and attempt < MAX_RETRIES - 1:
+                # On a conflict, actively release the update stream before retry.
+                if e.code == 409 and clear_on_conflict:
+                    _clear_conflicts(token)
+                wait = _retry_after(body, attempt)
+                print(f"[telegram] {method} HTTP {e.code}; nuovo tentativo tra {wait}s")
+                time.sleep(wait)
+                continue
+            raise RuntimeError(f"Telegram {method} HTTP {e.code}: {body}") from e
         except (urllib.error.URLError, TimeoutError) as e:
             last_exc = e
             if attempt < MAX_RETRIES - 1:
                 time.sleep(2 ** attempt)
     raise RuntimeError(f"Telegram {method} failed after {MAX_RETRIES} attempts: {last_exc}")
+
+
+def _clear_conflicts(token: str) -> None:
+    """Best-effort recovery from HTTP 409. A 409 means another consumer — a
+    leftover webhook, or a second polling process — is holding the bot's update
+    stream. `deleteWebhook` removes the webhook case (and `drop_pending_updates`
+    clears the stale backlog) so a fresh getUpdates long-poll can take over. It is
+    harmless if no webhook is set, and safe to call repeatedly."""
+    try:
+        _api(token, "deleteWebhook", {"drop_pending_updates": True},
+             clear_on_conflict=False)
+        print("[telegram] deleteWebhook OK (webhook/coda ripuliti).")
+    except Exception as e:
+        print(f"[telegram] deleteWebhook fallito (ignoro): {e}")
 
 
 # ─── Low-level helpers ────────────────────────────────────────────────────────
@@ -144,7 +192,16 @@ def wait_response(timeout_minutes: int = 30) -> bool:
     timeout or any other reply. Polls every ~30 seconds via long-polling.
     """
     token, chat_id = _creds()
-    offset   = _latest_offset(token)
+
+    # Proactively release the update stream before we start, so the very first
+    # getUpdates does not hit HTTP 409 (stale webhook / leftover poller).
+    _clear_conflicts(token)
+
+    try:
+        offset = _latest_offset(token)
+    except Exception as e:
+        print(f"[telegram] Offset iniziale non leggibile ({e}); parto da 0.")
+        offset = 0
     deadline = time.time() + timeout_minutes * 60
 
     print(f"[telegram] In attesa di risposta (max {timeout_minutes} min)...")
@@ -162,7 +219,11 @@ def wait_response(timeout_minutes: int = 30) -> bool:
                 "allowed_updates": ["message"],
             })
         except Exception as e:
-            print(f"[telegram] Errore polling: {e}. Riprovo...")
+            msg = str(e)
+            print(f"[telegram] Errore polling: {msg}. Riprovo...")
+            # If the conflict persisted past the inner retries, clear again.
+            if "409" in msg or "Conflict" in msg:
+                _clear_conflicts(token)
             time.sleep(5)
             continue
 
