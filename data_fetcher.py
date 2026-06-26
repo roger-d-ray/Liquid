@@ -1,8 +1,8 @@
 """
 data_fetcher.py
-Fetches OHLCV from the Coinbase Exchange public API and computes all technical
-indicators needed by the three trading skills (range-trading, trend-following,
-momentum-trading).
+Fetches OHLCV from the Kraken public API (with Coinbase as automatic fallback)
+and computes all technical indicators needed by the three trading skills
+(range-trading, trend-following, momentum-trading).
 Funding rate / OI / L-S ratio still come from Binance Futures public endpoints
 (out of scope of the OHLCV migration; live data is normally enriched via the
 Co-Invest MCP).
@@ -35,7 +35,9 @@ TIMEFRAME_CONFIG = {
     "1d":  {"granularity": 86400, "limit": 60},
 }
 
-# ─── Coinbase OHLCV (public, no auth) ────────────────────────────────────────
+# ─── Coinbase OHLCV (public, no auth) — FALLBACK source ──────────────────────
+# Coinbase rejects some datacenter IPs (HTTP 403), so it now sits behind Kraken
+# as the automatic fallback; it works fine for local runs.
 # The market-data candles endpoint is public: do NOT send COINBASE_API_KEY here.
 
 COINBASE_BASE = "https://api.exchange.coinbase.com"
@@ -51,11 +53,10 @@ BINANCE_SPOT    = "https://api.binance.com/api/v3"
 BINANCE_FUT     = "https://fapi.binance.com/fapi/v1"
 BINANCE_FUT_DATA = "https://fapi.binance.com/futures/data"
 
-# ─── Kraken fallback (public, no auth) ───────────────────────────────────────
-# Coinbase and Binance both reject datacenter/cloud IPs (Coinbase 403, Binance
-# HTTP 451). Kraken's public API does not geo-block cloud IPs, so it is used as
-# an automatic fallback when the primary source fails. Local runs keep using
-# Coinbase; cloud runs transparently fall back here.
+# ─── Kraken OHLCV / spot (public, no auth) — PRIMARY source ──────────────────
+# Kraken's public API does not geo-block datacenter/cloud IPs (unlike Coinbase
+# 403 and Binance HTTP 451), so it is the default OHLCV/spot source and works in
+# both local and cloud environments. Coinbase/Binance are kept as fallbacks.
 KRAKEN_BASE = "https://api.kraken.com/0/public"
 KRAKEN_PAIRS = {"BTC": "XBTUSD", "ETH": "ETHUSD", "SOL": "SOLUSD"}
 # granularity (seconds) -> Kraken OHLC interval (minutes). Kraken returns up to
@@ -222,27 +223,31 @@ def _kraken_ohlc(symbol: str, granularity_seconds: int, num_candles: int) -> lis
     return candles[-num_candles:]
 
 
+def _coinbase_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list:
+    """Coinbase OHLCV (fallback source). Coinbase has no native 4h granularity,
+    so 4h (14400s) is aggregated from native 1h candles; native granularities are
+    fetched directly with pagination."""
+    if granularity_seconds not in COINBASE_GRANULARITIES:
+        base, factor = _resample_plan(granularity_seconds)
+        base_candles = _coinbase_ohlcv(symbol, base, num_candles * factor)
+        return _aggregate(base_candles, granularity_seconds)[-num_candles:]
+    return _coinbase_ohlcv_native(symbol, granularity_seconds, num_candles)
+
+
 def fetch_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list:
     """Fetch `num_candles` OHLCV candles for `symbol` (BTC/ETH/SOL).
 
-    Primary source is Coinbase; on failure (e.g. cloud IPs rejected with 403) it
-    transparently falls back to Kraken. Returns a chronological (oldest→newest)
-    list of {open_time(ms), open, high, low, close, volume}.
-
-    Non-native granularities (e.g. 4h = 14400s) are aggregated from the largest
-    native granularity that divides them — the fallback happens at the native
-    level, so aggregation works regardless of which source served the candles.
+    Primary source is Kraken — its public API does not geo-block datacenter/cloud
+    IPs, so it works in both local and cloud runs. On failure it transparently
+    falls back to Coinbase (which rejects some cloud IPs with HTTP 403). Returns a
+    chronological (oldest→newest) list of
+    {open_time(ms), open, high, low, close, volume}.
     """
-    if granularity_seconds not in COINBASE_GRANULARITIES:
-        base, factor = _resample_plan(granularity_seconds)
-        base_candles = fetch_ohlcv(symbol, base, num_candles * factor)
-        return _aggregate(base_candles, granularity_seconds)[-num_candles:]
-
     try:
-        return _coinbase_ohlcv_native(symbol, granularity_seconds, num_candles)
-    except Exception as e:
-        print(f"[fallback Kraken: Coinbase ko -> {e}]", end=" ", flush=True)
         return _kraken_ohlc(symbol, granularity_seconds, num_candles)
+    except Exception as e:
+        print(f"[fallback Coinbase: Kraken ko -> {e}]", end=" ", flush=True)
+        return _coinbase_ohlcv(symbol, granularity_seconds, num_candles)
 
 
 def _kraken_spot(asset: str) -> dict:
@@ -266,19 +271,26 @@ def _kraken_spot(asset: str) -> dict:
     }
 
 
+def _binance_spot(symbol: str) -> dict:
+    """24h spot snapshot from Binance (fallback for fetch_spot)."""
+    t = http_get(f"{BINANCE_SPOT}/ticker/24hr?symbol={symbol}")
+    return {
+        "price":          float(t["lastPrice"]),
+        "change_24h_pct": float(t["priceChangePercent"]),
+        "volume_24h":     float(t["quoteVolume"]),
+        "high_24h":       float(t["highPrice"]),
+        "low_24h":        float(t["lowPrice"]),
+    }
+
+
 def fetch_spot(symbol: str) -> dict:
+    """Spot snapshot. Primary source is Kraken (cloud-reachable); falls back to
+    Binance's 24h ticker if Kraken fails."""
     try:
-        t = http_get(f"{BINANCE_SPOT}/ticker/24hr?symbol={symbol}")
-        return {
-            "price":          float(t["lastPrice"]),
-            "change_24h_pct": float(t["priceChangePercent"]),
-            "volume_24h":     float(t["quoteVolume"]),
-            "high_24h":       float(t["highPrice"]),
-            "low_24h":        float(t["lowPrice"]),
-        }
-    except Exception as e:
-        print(f"[fallback Kraken spot: Binance ko -> {e}]", end=" ", flush=True)
         return _kraken_spot(SYMBOL_TO_ASSET.get(symbol, symbol))
+    except Exception as e:
+        print(f"[fallback Binance spot: Kraken ko -> {e}]", end=" ", flush=True)
+        return _binance_spot(symbol)
 
 
 def fetch_futures(symbol: str) -> dict:

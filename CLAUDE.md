@@ -26,8 +26,9 @@ Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 ## Stack
 
 - Python 3.11+, requests, pandas, numpy, python-telegram-bot
-- Dati storici (OHLCV): Coinbase Exchange API (gratuita, no auth) — 4h aggregato da 1h
-- Funding / OI / long-short ratio: Binance Futures API (gratuita, no auth)
+- Dati storici (OHLCV): **Kraken public API** (gratuita, no auth) = fonte PRIMARIA — non geo-blocca gli IP cloud, 4h nativo. **Coinbase Exchange API** = fallback automatico (4h aggregato da 1h). Il passaggio Kraken→Coinbase è trasparente in data_fetcher.py.
+- Prezzo spot / 24h (price, change, volume): Kraken Ticker (primario) → Binance spot (fallback)
+- Funding / OI / long-short ratio: Binance Futures API (gratuita, no auth) — degrada a None se irraggiungibile (es. IP cloud bloccati con HTTP 451), poi arricchito via Co-Invest MCP
 - Dati live aggiuntivi (positioning, news, unusual): Co-Invest MCP
 - Trading: Co-Invest suggest_trade() dopo approvazione utente
 
