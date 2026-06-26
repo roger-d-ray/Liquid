@@ -51,6 +51,20 @@ BINANCE_SPOT    = "https://api.binance.com/api/v3"
 BINANCE_FUT     = "https://fapi.binance.com/fapi/v1"
 BINANCE_FUT_DATA = "https://fapi.binance.com/futures/data"
 
+# ─── Kraken fallback (public, no auth) ───────────────────────────────────────
+# Coinbase and Binance both reject datacenter/cloud IPs (Coinbase 403, Binance
+# HTTP 451). Kraken's public API does not geo-block cloud IPs, so it is used as
+# an automatic fallback when the primary source fails. Local runs keep using
+# Coinbase; cloud runs transparently fall back here.
+KRAKEN_BASE = "https://api.kraken.com/0/public"
+KRAKEN_PAIRS = {"BTC": "XBTUSD", "ETH": "ETHUSD", "SOL": "SOLUSD"}
+# granularity (seconds) -> Kraken OHLC interval (minutes). Kraken returns up to
+# 720 candles per request, ascending (oldest→newest).
+KRAKEN_INTERVALS = {60: 1, 300: 5, 900: 15, 1800: 30, 3600: 60, 14400: 240, 86400: 1440}
+
+# Reverse lookup Binance-symbol -> asset key, used by the spot fallback.
+SYMBOL_TO_ASSET = {v: k for k, v in ASSETS.items()}
+
 
 # ─── HTTP ─────────────────────────────────────────────────────────────────────
 
@@ -143,22 +157,10 @@ def _aggregate(base_candles: list, target_seconds: int) -> list:
     return [buckets[k] for k in sorted(buckets)]
 
 
-def fetch_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list:
-    """Fetch `num_candles` OHLCV candles from Coinbase for `symbol` (BTC/ETH/SOL).
-
-    Handles Coinbase's 300-candle-per-request limit via automatic pagination,
-    reverses Coinbase's newest-first ordering, and returns a chronological
-    (oldest→newest) list of dicts with the same schema used across the bot:
-    {open_time(ms), open, high, low, close, volume}.
-
-    Non-native granularities (e.g. 4h = 14400s) are aggregated from the largest
-    native granularity that divides them.
-    """
-    if granularity_seconds not in COINBASE_GRANULARITIES:
-        base, factor = _resample_plan(granularity_seconds)
-        base_candles = fetch_ohlcv(symbol, base, num_candles * factor)
-        return _aggregate(base_candles, granularity_seconds)[-num_candles:]
-
+def _coinbase_ohlcv_native(symbol: str, granularity_seconds: int,
+                           num_candles: int) -> list:
+    """Native-granularity Coinbase fetch with pagination. Returns a chronological
+    (oldest→newest) list of {open_time(ms), open, high, low, close, volume}."""
     product_id = COINBASE_PRODUCTS.get(symbol, symbol)
     collected: dict = {}                      # ts(seconds) -> candle dict (dedup)
     end = datetime.now(timezone.utc)
@@ -193,15 +195,90 @@ def fetch_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list
     return candles[-num_candles:]
 
 
-def fetch_spot(symbol: str) -> dict:
-    t = http_get(f"{BINANCE_SPOT}/ticker/24hr?symbol={symbol}")
+def _kraken_ohlc(symbol: str, granularity_seconds: int, num_candles: int) -> list:
+    """Native-granularity Kraken fetch (fallback). Kraken returns candles
+    ascending already, as [time, open, high, low, close, vwap, volume, count]
+    with time in seconds. Same output schema as the Coinbase fetcher."""
+    interval = KRAKEN_INTERVALS.get(granularity_seconds)
+    if interval is None:
+        raise RuntimeError(
+            f"Kraken: granularità {granularity_seconds}s non supportata "
+            f"(intervalli validi: {sorted(KRAKEN_INTERVALS)})"
+        )
+    pair = KRAKEN_PAIRS.get(symbol, symbol)
+    data = http_get(f"{KRAKEN_BASE}/OHLC?pair={pair}&interval={interval}")
+    if data.get("error"):
+        raise RuntimeError(f"Kraken OHLC {pair}: {data['error']}")
+    result = data["result"]
+    key = next(k for k in result if k != "last")    # result key name varies
+    candles = [{
+        "open_time": int(r[0]) * 1000,
+        "open":   float(r[1]),
+        "high":   float(r[2]),
+        "low":    float(r[3]),
+        "close":  float(r[4]),
+        "volume": float(r[6]),
+    } for r in result[key]]
+    return candles[-num_candles:]
+
+
+def fetch_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list:
+    """Fetch `num_candles` OHLCV candles for `symbol` (BTC/ETH/SOL).
+
+    Primary source is Coinbase; on failure (e.g. cloud IPs rejected with 403) it
+    transparently falls back to Kraken. Returns a chronological (oldest→newest)
+    list of {open_time(ms), open, high, low, close, volume}.
+
+    Non-native granularities (e.g. 4h = 14400s) are aggregated from the largest
+    native granularity that divides them — the fallback happens at the native
+    level, so aggregation works regardless of which source served the candles.
+    """
+    if granularity_seconds not in COINBASE_GRANULARITIES:
+        base, factor = _resample_plan(granularity_seconds)
+        base_candles = fetch_ohlcv(symbol, base, num_candles * factor)
+        return _aggregate(base_candles, granularity_seconds)[-num_candles:]
+
+    try:
+        return _coinbase_ohlcv_native(symbol, granularity_seconds, num_candles)
+    except Exception as e:
+        print(f"[fallback Kraken: Coinbase ko -> {e}]", end=" ", flush=True)
+        return _kraken_ohlc(symbol, granularity_seconds, num_candles)
+
+
+def _kraken_spot(asset: str) -> dict:
+    """Spot snapshot from Kraken's public Ticker (fallback for fetch_spot).
+    Note: Kraken's 'o' is the *current day* open, so change_24h_pct is an
+    approximation of intraday change; volume is converted to quote (USD) via
+    last price. Good enough for the live snapshot when Binance is blocked."""
+    pair = KRAKEN_PAIRS.get(asset, asset)
+    data = http_get(f"{KRAKEN_BASE}/Ticker?pair={pair}")
+    if data.get("error"):
+        raise RuntimeError(f"Kraken Ticker {pair}: {data['error']}")
+    tk = next(iter(data["result"].values()))
+    last  = float(tk["c"][0])                    # c = [last_price, lot_volume]
+    open_ = float(tk["o"][0] if isinstance(tk["o"], list) else tk["o"])
     return {
-        "price":          float(t["lastPrice"]),
-        "change_24h_pct": float(t["priceChangePercent"]),
-        "volume_24h":     float(t["quoteVolume"]),
-        "high_24h":       float(t["highPrice"]),
-        "low_24h":        float(t["lowPrice"]),
+        "price":          last,
+        "change_24h_pct": round((last - open_) / open_ * 100, 3) if open_ else None,
+        "volume_24h":     float(tk["v"][1]) * last,   # v[1] = 24h base volume
+        "high_24h":       float(tk["h"][1]),          # h[1] = 24h high
+        "low_24h":        float(tk["l"][1]),          # l[1] = 24h low
     }
+
+
+def fetch_spot(symbol: str) -> dict:
+    try:
+        t = http_get(f"{BINANCE_SPOT}/ticker/24hr?symbol={symbol}")
+        return {
+            "price":          float(t["lastPrice"]),
+            "change_24h_pct": float(t["priceChangePercent"]),
+            "volume_24h":     float(t["quoteVolume"]),
+            "high_24h":       float(t["highPrice"]),
+            "low_24h":        float(t["lowPrice"]),
+        }
+    except Exception as e:
+        print(f"[fallback Kraken spot: Binance ko -> {e}]", end=" ", flush=True)
+        return _kraken_spot(SYMBOL_TO_ASSET.get(symbol, symbol))
 
 
 def fetch_futures(symbol: str) -> dict:
