@@ -475,9 +475,14 @@ def _validate_momentum(p: Proposal, r: ValidationResult) -> bool:
 
 # ─── Portfolio limits ─────────────────────────────────────────────────────────
 
-MAX_OPEN_POSITIONS       = 3
-MAX_TOTAL_EXPOSURE_PCT   = 0.60   # 60% of portfolio
-MAX_PER_ASSET_EXPOSURE_PCT = 0.30 # 30% per asset
+MAX_OPEN_POSITIONS = 3
+# Portfolio caps are MARGIN-based, not notional-based. With leverage (up to 20x)
+# a correctly risk-sized intraday trade has a notional several times the equity
+# (tight stop + 3–5% risk → notional ≈ risk / stop_pct), so a raw-notional cap
+# would reject essentially every intraday trade. Margin = notional / leverage is
+# the real capital at stake, so we cap that instead.
+MAX_TOTAL_MARGIN_PCT     = 0.60   # total margin used ≤ 60% of equity (40% buffer)
+MAX_PER_ASSET_MARGIN_PCT = 0.40   # margin on a single asset ≤ 40% of equity
 
 
 # ─── RiskManager ──────────────────────────────────────────────────────────────
@@ -531,6 +536,18 @@ class RiskManager:
         except (TypeError, ValueError):
             return 0.0
 
+    @staticmethod
+    def _pos_margin(pos: dict) -> float:
+        """Capital actually committed = notional / leverage. Unknown leverage is
+        treated as 1x (i.e. margin == notional), the conservative assumption."""
+        notional = RiskManager._pos_notional(pos)
+        lev = pos.get("leverage", pos.get("lev"))
+        try:
+            lev = float(lev)
+        except (TypeError, ValueError):
+            lev = None
+        return notional / lev if lev and lev > 0 else notional
+
     def _validate_portfolio(self, p: Proposal, r: ValidationResult) -> bool:
         positions = self._portfolio.get("positions", [])
 
@@ -552,22 +569,23 @@ class RiskManager:
 
         equity = self._portfolio.get("total_equity")
         if equity:
-            asset_exposure = sum(
-                self._pos_notional(pos) for pos in positions
+            asset_margin = sum(
+                self._pos_margin(pos) for pos in positions
                 if self._pos_asset(pos) == p.asset
             )
-            total_exposure = sum(self._pos_notional(pos) for pos in positions)
-            if asset_exposure / equity >= MAX_PER_ASSET_EXPOSURE_PCT:
+            total_margin = sum(self._pos_margin(pos) for pos in positions)
+            if asset_margin / equity >= MAX_PER_ASSET_MARGIN_PCT:
                 r.rejection_reason = (
-                    f"Per-asset exposure limit: {p.asset} already at "
-                    f"{asset_exposure/equity*100:.1f}% of equity "
-                    f"(max {MAX_PER_ASSET_EXPOSURE_PCT*100:.0f}%)."
+                    f"Per-asset margin limit: {p.asset} already using "
+                    f"{asset_margin/equity*100:.1f}% of equity as margin "
+                    f"(max {MAX_PER_ASSET_MARGIN_PCT*100:.0f}%)."
                 )
                 return False
-            if total_exposure / equity >= MAX_TOTAL_EXPOSURE_PCT:
+            if total_margin / equity >= MAX_TOTAL_MARGIN_PCT:
                 r.rejection_reason = (
-                    f"Total exposure limit: portfolio already at "
-                    f"{total_exposure/equity*100:.1f}% (max {MAX_TOTAL_EXPOSURE_PCT*100:.0f}%)."
+                    f"Total margin limit: portfolio already using "
+                    f"{total_margin/equity*100:.1f}% of equity as margin "
+                    f"(max {MAX_TOTAL_MARGIN_PCT*100:.0f}%)."
                 )
                 return False
 
