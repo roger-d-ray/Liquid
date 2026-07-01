@@ -8,6 +8,7 @@ Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 
 ## Flusso ad ogni run
 
+0. **Flatten intraday (PRIMA di tutto):** aggiorna lo snapshot e chiudi le posizioni scadute — vedi sezione "Flatten automatico". Va eseguito ad ogni run, prima di cercare nuovi setup, così libera slot/esposizione e garantisce zero overnight.
 1. Esegui data_fetcher.py → genera data/market_data.json
 2. Leggi market_data.json e applica le 3 skill
 3. Per il segnale migliore (confidence più alta), esegui risk_manager.py
@@ -25,8 +26,8 @@ Dopo approvazione Telegram (exit code 0 da telegram_notify.py):
 1. Chiama `execute_order()` via Co-Invest MCP con i parametri validati dal risk_manager:
    - symbol: asset (es. "BTC")
    - side: "buy" (long) o "sell" (short)
-   - size: notionale in USD (calcola: ~1% equity a rischio / stop_distance × entry_price × leverage)
-   - leverage: 2 (default conservativo)
+   - size: notionale in USD. Dimensiona sul RISCHIO, non sulla leva: `rischio_$ = risk_pct × equity` (risk_pct = 3–5%, vedi Modalità intraday), poi `size_coin = rischio_$ / |entry − stop_loss|`, `size = size_coin × entry`. La leva NON entra nel calcolo del rischio: determina solo il margine impegnato (`margine = size / leverage`) e la distanza di liquidazione.
+   - leverage: scalabile per confidence, **max 20x** (validato in risk_manager.py → MAX_LEVERAGE). Usa leve alte SOLO con stop stretti su ATR 15m. Default suggerito: 10x setup normali, fino a 20x sui setup a confidence più alta.
    - type: "market"
    - tp: target
    - sl: stop_loss
@@ -40,10 +41,43 @@ Dopo approvazione Telegram (exit code 0 da telegram_notify.py):
 3. Invia il messaggio con: python telegram_notify.py --message "<testo>"
 4. Persisti lo snapshot per /portfolio: `portfolio.save_portfolio_state(portfolio.from_coinvest(gp))` usando il `gp` appena ottenuto da `get_portfolio()` (riusa la stessa chiamata del punto 2 — non serve interrogare due volte).
 
+## Modalità intraday aggressiva (orizzonte di giornata)
+
+Profilo operativo corrente: **scalping/intraday aggressivo**. Le posizioni nascono per aprirsi e chiudersi in giornata, mai overnight. Le skill in skills/ restano la fonte di verità — sono agnostiche all'orizzonte (momentum-trading e range-trading coprono esplicitamente l'intraday); cambia SOLO su che dati le applichi e come esci.
+
+- **Timeframe di analisi:** primario **15m e 1h** (già calcolati in market_data.json). NON usare 4h/1d per generare il segnale: servono solo come contesto di direzione macro. Il campo `timeframe` del proposal deve riflettere 15m/1h.
+- **Skill da privilegiare:** **momentum-trading** e **range-trading** (le due intraday). **trend-following** è usata solo come filtro di direzione (EMA50/200 a 1h): non come generatore di segnali intraday, perché il suo orizzonte è settimane/mesi.
+- **Leva:** scalabile per confidence, **massimo 20x** (tetto forzato in risk_manager.py). Alte leve solo con stop stretti.
+- **Rischio per trade:** **3–5% dell'equity** (`risk_pct`). Vedi formula size nello STEP 5.
+- **Uscita = TP/SL stretti intraday + flatten automatico (backstop).** Dimensiona TP e SL sull'**ATR a 15m** così la posizione si risolve in fretta (uscita primaria). In più, `intraday_exit.py` fornisce un **flatten 100% automatico** che garantisce zero overnight (vedi sezione dedicata). ⚠️ Conseguenza a 20x: un gap o un wick oltre lo stop può liquidare/eseguire a prezzo peggiore — lo stop stretto e ancorato a struttura resta la prima protezione. Se un setup non consente uno stop stretto e coerente, **è un no-trade**.
+- **R/R minimo** 1.2 (hard) come da risk_manager; sotto 1.8 è comunque un warning.
+
+## Flatten automatico (garanzia "chiude in giornata")
+
+Meccanismo che rende l'uscita intraday **100% automatica, senza intervento umano**.
+
+- **Chi lo triggera:** la routine oraria stessa. Il cron che fa girare la routine ogni 60 min *è* il trigger — nessun demone separato, nessun umano. Ad ogni run l'agente esegue lo STEP 0.
+- **Decisione (Python, no credenziali):** `intraday_exit.py` legge lo snapshot `data/portfolio_state.json` e stampa su stdout un array JSON delle posizioni da chiudere. Due regole indipendenti (basta una):
+  1. **Flatten di fine giornata (garanzia dura):** oltre `FLATTEN_HOUR_UTC` (default 23) chiude TUTTE le posizioni aperte → mai overnight. Non richiede l'orario di apertura, quindi funziona sempre.
+  2. **Max-hold (best effort):** se lo snapshot ha `opened_at`, chiude la posizione dopo `MAX_HOLD_HOURS` (default 6h). Inattiva in silenzio se l'orario di apertura non è disponibile dall'MCP.
+  Entrambe le soglie sono override via env: `FLATTEN_HOUR_UTC`, `MAX_HOLD_HOURS`.
+- **Esecuzione (agente, via MCP):** la chiusura vera è un'azione MCP. ⚠️ L'UNICO tool di chiusura chiamabile dall'agente è **`close_positions_batch`**. Il tool singolare `close_position` è SYSTEM INTERNAL e **non va MAI chiamato** dall'agente. `close_positions_batch` è pre-autorizzato dalla policy intraday (stessa logica di `execute_order`: la policy sostituisce il widget di conferma). Lo STEP 0 è:
+  1. `gp = get_portfolio()` → `portfolio.save_portfolio_state(portfolio.from_coinvest(gp))` (aggiorna lo snapshot con lo stato reale).
+  2. `python intraday_exit.py` → leggi l'array JSON su stdout: `[{"symbol":"BTC-PERP","asset":"BTC","side":"long","reason":"..."}]`.
+  3. Se l'array NON è vuoto, chiudi via Co-Invest MCP con **una sola** chiamata:
+     `close_positions_batch(confirmed=true, symbols=[<lista dei "symbol" perp dell'array>])`.
+     (I `symbol` sono in formato perp, es. "BTC-PERP" — passa quelli, non l'`asset`. Con `symbols` omesso chiuderebbe TUTTE le posizioni: passa sempre la lista esplicita.)
+  4. Se hai chiuso qualcosa: ri-esegui `get_portfolio()`, ri-salva lo snapshot, e notifica su Telegram (`python telegram_notify.py --message "..."`) con l'elenco di cosa è stato flattato e il motivo.
+  5. Se l'array è vuoto: nessuna chiusura, prosegui.
+- Lo STEP 0 non apre mai posizioni: chiude soltanto. È indipendente dalla proposta di trading (STEP 1-6).
+
 ## Regole assolute
 
+- Il flatten intraday (STEP 0) va eseguito ad ogni run, anche senza nuovi trade: è la garanzia che nulla resta overnight
 - Senza market_data.json aggiornato: fermati e notifica su Telegram
 - Se nessuna skill supera confidence 0.55: manda "Nessun setup valido"
+- Leva mai oltre 20x: risk_manager.py rifiuta il proposal (MAX_LEVERAGE)
+- Analisi e segnale su 15m/1h, mai su 4h/1d (4h/1d = solo contesto)
 - Nessuna credenziale nel codice: leggi sempre da variabili d'ambiente
 - Le skill in skills/ sono la fonte di verità: non ignorarle mai
 

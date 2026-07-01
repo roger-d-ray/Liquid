@@ -40,6 +40,9 @@ class Proposal:
     confidence: float
     price:      float
 
+    # Execution sizing
+    leverage:   Optional[float] = None   # capped at MAX_LEVERAGE
+
     # Universal context
     adx:            Optional[float] = None
     rsi:            Optional[float] = None
@@ -106,13 +109,19 @@ class ValidationResult:
 # Global (CLAUDE.md)
 MIN_CONFIDENCE = 0.55
 
-# Risk-reward
-MIN_RR_HARD = 1.5   # reject below
-MIN_RR_WARN = 2.0   # warn below
+# Leverage — intraday aggressive policy (CLAUDE.md). Nothing used to validate
+# leverage; this is the hard ceiling. Proposals above it are rejected outright.
+MAX_LEVERAGE = 20.0
 
-# ATR-based stop sizing
-ATR_STOP_MIN_MULT    = 1.0   # stop tighter than N×ATR → adjust
-ATR_STOP_ADJUST_MULT = 1.5   # adjusted stop placed at N×ATR from entry
+# Risk-reward — loosened for intraday scalps (shorter horizon, tighter targets).
+MIN_RR_HARD = 1.2   # reject below
+MIN_RR_WARN = 1.8   # warn below
+
+# ATR-based stop sizing — tightened for intraday (15m/1h) horizon so stops sit
+# close to entry and positions resolve fast; wide 4h-style stops would keep a
+# 20x position open far too long.
+ATR_STOP_MIN_MULT    = 0.5    # stop tighter than N×ATR → adjust
+ATR_STOP_ADJUST_MULT = 0.75   # adjusted stop placed at N×ATR from entry
 
 # Range trading
 ADX_RANGE_HARD_MAX = 25.0   # above → trending → reject range signal
@@ -157,6 +166,13 @@ def _validate_universal(p: Proposal, r: ValidationResult) -> bool:
         r.rejection_reason = (
             f"Confidence {p.confidence:.2f} is below the minimum {MIN_CONFIDENCE}. "
             "No alert sent."
+        )
+        return False
+
+    # 1b. Leverage ceiling (intraday aggressive policy)
+    if p.leverage is not None and p.leverage > MAX_LEVERAGE:
+        r.rejection_reason = (
+            f"Leverage {p.leverage:g}x exceeds the maximum {MAX_LEVERAGE:g}x allowed."
         )
         return False
 
@@ -494,6 +510,27 @@ class RiskManager:
         with self._LOG_PATH.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
 
+    @staticmethod
+    def _pos_asset(pos: dict):
+        return pos.get("asset") or pos.get("symbol")
+
+    @staticmethod
+    def _pos_side(pos: dict):
+        # Snapshot schema (portfolio.from_coinvest) uses "side"; older/other
+        # payloads may use "signal". Tolerate both so a real snapshot never crashes.
+        return pos.get("side") or pos.get("signal")
+
+    @staticmethod
+    def _pos_notional(pos: dict) -> float:
+        # Snapshot uses "size_usd"; risk_manager's own logs use "notional".
+        val = pos.get("size_usd")
+        if val is None:
+            val = pos.get("notional")
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return 0.0
+
     def _validate_portfolio(self, p: Proposal, r: ValidationResult) -> bool:
         positions = self._portfolio.get("positions", [])
 
@@ -505,19 +542,21 @@ class RiskManager:
             return False
 
         for pos in positions:
-            if pos.get("asset") == p.asset and pos.get("signal") != p.signal:
+            pos_side = self._pos_side(pos)
+            if self._pos_asset(pos) == p.asset and pos_side != p.signal:
                 r.rejection_reason = (
                     f"Conflicting positions: cannot open {p.signal} on {p.asset} "
-                    f"while a {pos['signal']} position is already open."
+                    f"while a {pos_side} position is already open."
                 )
                 return False
 
         equity = self._portfolio.get("total_equity")
         if equity:
             asset_exposure = sum(
-                pos.get("notional", 0) for pos in positions if pos.get("asset") == p.asset
+                self._pos_notional(pos) for pos in positions
+                if self._pos_asset(pos) == p.asset
             )
-            total_exposure = sum(pos.get("notional", 0) for pos in positions)
+            total_exposure = sum(self._pos_notional(pos) for pos in positions)
             if asset_exposure / equity >= MAX_PER_ASSET_EXPOSURE_PCT:
                 r.rejection_reason = (
                     f"Per-asset exposure limit: {p.asset} already at "

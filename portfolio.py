@@ -187,6 +187,10 @@ def from_coinvest(gp: dict) -> dict:
         notional = abs(size * mark) if (size is not None and mark is not None) else None
         out["positions"].append({
             "asset":          p.get("displayName") or p.get("symbol"),
+            # Raw perp symbol (e.g. "BTC-PERP") — required by
+            # close_positions_batch(symbols=[...]); close needs the perp id, not
+            # the display name.
+            "symbol":         p.get("symbol"),
             "side":           p.get("side"),
             "size_coin":      size,
             "size_usd":       notional,
@@ -197,6 +201,11 @@ def from_coinvest(gp: dict) -> dict:
             "tp":             _fnum(p.get("tp")),
             "sl":             _fnum(p.get("sl")),
             "liquidation_px": _fnum(p.get("liquidationPx")),
+            # Best-effort open time — used by intraday_exit.py for the max-hold
+            # flatten rule. Absent in some MCP payloads → left None (the
+            # end-of-day flatten rule guarantees no overnight hold regardless).
+            "opened_at":      _first(p, "openedAt", "openTime", "createdAt",
+                                     "created_at", "timestamp"),
         })
     return out
 
