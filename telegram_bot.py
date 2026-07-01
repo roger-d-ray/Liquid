@@ -42,7 +42,16 @@ from telegram_notify import (
     send_message,
 )
 from portfolio import PortfolioUnavailable, build_portfolio_message
+import paper_reset
 import telegram_lock as lock
+
+# How long the user has to confirm a paper-reset after asking for it (seconds).
+_RESET_CONFIRM_WINDOW = 120
+
+# In-memory pending confirmations: chat_id -> epoch seconds the reset was armed.
+# In-memory is fine: a single persistent process, and a lost confirmation on
+# restart just means the user re-issues the command.
+_pending_reset: dict[str, float] = {}
 
 # Short long-poll so the poller can yield the stream quickly when a proposal
 # wait (telegram_notify.wait_response) needs it — see telegram_lock.py.
@@ -51,6 +60,7 @@ POLL_TIMEOUT = lock.POLLER_POLL_TIMEOUT
 _HELP_TEXT = (
     "🤖 *Liquid Bot — comandi*\n\n"
     "/portfolio — mostra saldo, equity, margine e posizioni aperte (sola lettura)\n"
+    "reset paper trading — azzera il paper account e riparte da 10.000$ (richiede conferma)\n"
     "/help — questo messaggio"
 )
 
@@ -71,12 +81,50 @@ def _handle_portfolio(token: str, chat_id: str) -> None:
     _do_send(token, chat_id, msg)
 
 
+def _handle_reset_request(token: str, chat_id: str) -> None:
+    """Arm a paper-reset and ask the user to confirm — on Telegram."""
+    _pending_reset[chat_id] = time.time()
+    print("[bot] richiesta reset paper — in attesa di conferma")
+    _do_send(
+        token, chat_id,
+        "⚠️ *Reset paper trading*\n\n"
+        "Questo AZZERA il paper account: chiude tutte le posizioni, cancella gli "
+        "ordini e riporta l'equity a *10.000$*. Operazione irreversibile.\n\n"
+        "Per confermare, rispondi *CONFERMA RESET* entro 2 minuti.",
+    )
+
+
+def _handle_reset_confirm(token: str, chat_id: str) -> None:
+    """Validate the confirmation window and queue the reset for the routine."""
+    armed = _pending_reset.pop(chat_id, None)
+    if armed is None or (time.time() - armed) > _RESET_CONFIRM_WINDOW:
+        _do_send(
+            token, chat_id,
+            "⏳ Nessuna richiesta di reset in attesa (o è scaduta). "
+            "Invia di nuovo _reset paper trading_ per ricominciare.",
+        )
+        return
+    req = paper_reset.request_reset(requested_by=f"telegram:{chat_id}")
+    print(f"[bot] reset paper confermato e messo in coda: {req}")
+    _do_send(
+        token, chat_id,
+        "✅ *Reset confermato e messo in coda.*\n\n"
+        "Verrà eseguito dall'agente al prossimo ciclo della routine (entro ~60 min): "
+        "azzera il paper e riparte da 10.000$. Riceverai un messaggio a reset avvenuto.",
+    )
+
+
 def _dispatch(token: str, chat_id: str, text: str) -> None:
+    norm = text.strip().lower()
     # Normalise: "/portfolio@my_bot arg" -> "portfolio"
-    cmd = text.strip().split()[0].lstrip("/").split("@")[0].lower()
+    cmd = norm.split()[0].lstrip("/").split("@")[0]
     if cmd == "portfolio":
         print("[bot] comando /portfolio")
         _handle_portfolio(token, chat_id)
+    elif norm in ("reset paper trading", "/reset_paper") or cmd in ("reset_paper", "resetpaper"):
+        _handle_reset_request(token, chat_id)
+    elif norm in ("conferma reset", "/conferma_reset") or cmd == "conferma_reset":
+        _handle_reset_confirm(token, chat_id)
     elif cmd in ("start", "help"):
         _do_send(token, chat_id, _HELP_TEXT)
     else:

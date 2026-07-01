@@ -8,7 +8,9 @@ Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 
 ## Flusso ad ogni run
 
-0. **Flatten intraday (PRIMA di tutto):** aggiorna lo snapshot e chiudi le posizioni scadute — vedi sezione "Flatten automatico". Va eseguito ad ogni run, prima di cercare nuovi setup, così libera slot/esposizione e garantisce zero overnight.
+0. **Reset paper + Flatten intraday (PRIMA di tutto):**
+   - **0a. Reset paper (se richiesto):** controlla `paper_reset.pending()`. Se c'è una richiesta, esegui il reset via MCP — vedi sezione "Reset paper trading". Dopo il reset il conto è vuoto: salta il flatten e prosegui con un conto fresco.
+   - **0b. Flatten intraday:** aggiorna lo snapshot e chiudi le posizioni scadute — vedi sezione "Flatten automatico". Va eseguito ad ogni run, prima di cercare nuovi setup, così libera slot/esposizione e garantisce zero overnight.
 1. Esegui data_fetcher.py → genera data/market_data.json
 2. Leggi market_data.json e applica le 3 skill
 3. Per il segnale migliore (confidence più alta), esegui risk_manager.py
@@ -70,6 +72,24 @@ Meccanismo che rende l'uscita intraday **100% automatica, senza intervento umano
   4. Se hai chiuso qualcosa: ri-esegui `get_portfolio()`, ri-salva lo snapshot, e notifica su Telegram (`python telegram_notify.py --message "..."`) con l'elenco di cosa è stato flattato e il motivo.
   5. Se l'array è vuoto: nessuna chiusura, prosegui.
 - Lo STEP 0 non apre mai posizioni: chiude soltanto. È indipendente dalla proposta di trading (STEP 1-6).
+
+## Reset paper trading (comando Telegram)
+
+Comando on-demand per azzerare il paper account e ripartire da 10.000$. La conferma avviene **sempre su Telegram**.
+
+- **Perché due pezzi:** `reset_paper_account()` è un'azione **MCP**, quindi solo l'agente (routine) può eseguirla — `telegram_bot.py` non ha credenziali (come `/portfolio`). Il bot gestisce comando + conferma e **registra la richiesta** in un flag file; l'agente la esegue al ciclo successivo.
+- **Lato bot (`telegram_bot.py`):**
+  1. L'utente invia `reset paper trading` (o `/reset_paper`). Il bot risponde chiedendo conferma.
+  2. L'utente invia `CONFERMA RESET` (o `/conferma_reset`) entro 2 minuti → il bot chiama `paper_reset.request_reset()` che scrive `data/reset_request.json`.
+  3. Fuori finestra o senza richiesta attiva → conferma rifiutata, nessun flag.
+- **Lato agente (STEP 0a, ad ogni run):**
+  1. `import paper_reset` → `req = paper_reset.pending()`. Se `None`, salta (nessun reset in coda).
+  2. Se c'è una richiesta: assicurati di essere in paper (`paper_trading_status()`; se necessario `enable_paper_trading()`), poi chiama **`reset_paper_account()`** via Co-Invest MCP.
+  3. Ricostruisci lo snapshot (`get_portfolio()` → `portfolio.save_portfolio_state(portfolio.from_coinvest(gp))`) così `/portfolio` mostra i 10.000$ freschi.
+  4. Notifica su Telegram (`python telegram_notify.py --message "♻️ Paper account resettato: riparto da $10.000, nessuna posizione aperta."`).
+  5. `paper_reset.clear()` per rimuovere il flag (altrimenti il reset si ripeterebbe ogni run).
+  6. Dopo il reset il conto è vuoto → salta il flatten (0b) e prosegui la routine normalmente.
+- Il flag vive in `data/` (git-ignored): resta locale, mai committato.
 
 ## Regole assolute
 
