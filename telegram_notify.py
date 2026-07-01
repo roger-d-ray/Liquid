@@ -21,6 +21,11 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+try:
+    import telegram_lock as _lock
+except Exception:  # coordination is optional; never block trading if it's absent
+    _lock = None
+
 WAIT_SECONDS  = 30 * 60   # default timeout
 POLL_TIMEOUT  = 30        # seconds per getUpdates long-poll
 MAX_RETRIES   = 3
@@ -193,59 +198,89 @@ def wait_response(timeout_minutes: int = 30) -> bool:
     """
     token, chat_id = _creds()
 
-    # Proactively release the update stream before we start, so the very first
-    # getUpdates does not hit HTTP 409 (stale webhook / leftover poller).
-    _clear_conflicts(token)
+    # Structural single-consumer handoff: if the persistent command poller
+    # (telegram_bot.py) is running, claim the stream and give it time to yield
+    # its in-flight long-poll before we start ours — this prevents the HTTP 409
+    # collision by design rather than recovering from it. Best-effort: if the
+    # lock module is unavailable, fall back to the original behavior.
+    poller_offset = None
+    if _lock is not None:
+        try:
+            _lock.acquire("wait_response")
+            if _lock.poller_alive():
+                print(f"[telegram] Poller /portfolio attivo — attendo lo yield "
+                      f"({_lock.GRACE_SECONDS}s) per evitare il 409.")
+                poller_offset = _lock.load_offset()
+                time.sleep(_lock.GRACE_SECONDS)
+        except Exception as e:
+            print(f"[telegram] Coordinamento lock non riuscito (ignoro): {e}")
 
     try:
-        offset = _latest_offset(token)
-    except Exception as e:
-        print(f"[telegram] Offset iniziale non leggibile ({e}); parto da 0.")
-        offset = 0
-    deadline = time.time() + timeout_minutes * 60
+        # Proactively release the update stream before we start, so the very
+        # first getUpdates does not hit HTTP 409 (stale webhook / leftover poller).
+        _clear_conflicts(token)
 
-    print(f"[telegram] In attesa di risposta (max {timeout_minutes} min)...")
+        # Resume from where the poller left off (so a reply arriving during the
+        # handoff is not skipped); otherwise skip the stale backlog as before.
+        if poller_offset is not None:
+            offset = poller_offset
+        else:
+            try:
+                offset = _latest_offset(token)
+            except Exception as e:
+                print(f"[telegram] Offset iniziale non leggibile ({e}); parto da 0.")
+                offset = 0
+        deadline = time.time() + timeout_minutes * 60
 
-    while time.time() < deadline:
-        remaining  = int(deadline - time.time())
-        poll_secs  = min(remaining, POLL_TIMEOUT)
-        if poll_secs <= 0:
-            break
+        print(f"[telegram] In attesa di risposta (max {timeout_minutes} min)...")
 
-        try:
-            res = _api(token, "getUpdates", {
-                "offset":          offset,
-                "timeout":         poll_secs,
-                "allowed_updates": ["message"],
-            })
-        except Exception as e:
-            msg = str(e)
-            print(f"[telegram] Errore polling: {msg}. Riprovo...")
-            # If the conflict persisted past the inner retries, clear again.
-            if "409" in msg or "Conflict" in msg:
-                _clear_conflicts(token)
-            time.sleep(5)
-            continue
+        while time.time() < deadline:
+            remaining  = int(deadline - time.time())
+            poll_secs  = min(remaining, POLL_TIMEOUT)
+            if poll_secs <= 0:
+                break
 
-        for upd in res.get("result", []):
-            offset = upd["update_id"] + 1
-            msg    = upd.get("message", {})
-            if str(msg.get("chat", {}).get("id", "")) != str(chat_id):
+            try:
+                res = _api(token, "getUpdates", {
+                    "offset":          offset,
+                    "timeout":         poll_secs,
+                    "allowed_updates": ["message"],
+                })
+            except Exception as e:
+                msg = str(e)
+                print(f"[telegram] Errore polling: {msg}. Riprovo...")
+                # If the conflict persisted past the inner retries, clear again.
+                if "409" in msg or "Conflict" in msg:
+                    _clear_conflicts(token)
+                time.sleep(5)
                 continue
-            text = msg.get("text", "").strip()
-            word = text.lower().strip(".,!? ")
-            if word in ACCEPT_WORDS:
-                print(f"[telegram] ACCETTATO (risposta: '{text}')")
-                _do_send(token, chat_id, "✅ Trade approvato. Esecuzione in corso...")
-                return True
-            else:
-                print(f"[telegram] RIFIUTATO (risposta: '{text}')")
-                _do_send(token, chat_id, "❌ Trade rifiutato.")
-                return False
 
-    print("[telegram] Timeout: nessuna risposta. Proposta annullata.")
-    _do_send(token, chat_id, "⏰ Nessuna risposta ricevuta. Trade annullato.")
-    return False
+            for upd in res.get("result", []):
+                offset = upd["update_id"] + 1
+                msg    = upd.get("message", {})
+                if str(msg.get("chat", {}).get("id", "")) != str(chat_id):
+                    continue
+                text = msg.get("text", "").strip()
+                word = text.lower().strip(".,!? ")
+                if word in ACCEPT_WORDS:
+                    print(f"[telegram] ACCETTATO (risposta: '{text}')")
+                    _do_send(token, chat_id, "✅ Trade approvato. Esecuzione in corso...")
+                    return True
+                else:
+                    print(f"[telegram] RIFIUTATO (risposta: '{text}')")
+                    _do_send(token, chat_id, "❌ Trade rifiutato.")
+                    return False
+
+        print("[telegram] Timeout: nessuna risposta. Proposta annullata.")
+        _do_send(token, chat_id, "⏰ Nessuna risposta ricevuta. Trade annullato.")
+        return False
+    finally:
+        # Hand the stream back to the command poller on every exit path.
+        if _lock is not None:
+            try:
+                _lock.release("wait_response")
+            except Exception:
+                pass
 
 
 def notify_and_wait(proposal: dict, timeout_minutes: int = 30) -> bool:
