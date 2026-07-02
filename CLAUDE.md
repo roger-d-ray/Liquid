@@ -36,6 +36,8 @@ Dopo approvazione Telegram (exit code 0 da telegram_notify.py):
    - tp: target
    - sl: stop_loss
    - reasoning: stringa con la motivazione tecnica sintetica
+
+   ⚠️ **La size va calcolata PRIMA della notifica, non dopo l'approvazione**, così il messaggio Telegram mostra quanto stai investendo. Usa `sizing.compute_size(equity, risk_pct, entry, stop_loss, leverage)` (equity da `get_portfolio()`), poi scrivi `size_usd`, `margin_usd`, `risk_usd`, `equity`, `risk_pct` nel proposal PRIMA di chiamare `telegram_notify.py`. `send_proposal`/`format_proposal` mostrano il blocco "💰 Investito / 🔒 Margine / ⚠️ Rischio se SL". Alla conferma, passa a `execute_order()` lo **stesso** `size_usd` mostrato (unica fonte di verità: nessuna divergenza tra ciò che approvi e ciò che viene eseguito).
 2. Dopo execute_order(), chiama `get_portfolio()` e costruisci il messaggio Telegram:
 
    ✅ Trade eseguito! [emoji] [ASSET] [SIGNAL.upper()] · [leverage]x · $[size]
@@ -160,7 +162,13 @@ Opzione A (client REST diretto con chiavi in `.env`) resta **non necessaria** fi
 "side": "long|short",
 "entry": float,
 "tp": float, "sl": float,
-"leverage": float, "size_usd": float,
+"leverage": float,
 "risk_pct": float, "rr_ratio": float,
-"confidence": float (0.0-1.0)
+"confidence": float (0.0-1.0),
+
+// Sizing — calcolato da sizing.compute_size() PRIMA della notifica (mostrato in proposta):
+"equity": float,        // equity del conto (da get_portfolio)
+"risk_usd": float,      // risk_pct × equity = € persi se scatta lo SL
+"size_usd": float,      // notionale investito (= size_coin × entry)
+"margin_usd": float     // size_usd / leverage = capitale realmente impegnato
 }

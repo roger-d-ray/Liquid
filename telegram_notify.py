@@ -150,15 +150,61 @@ def send_message(text: str) -> None:
     _do_send(token, chat_id, text)
 
 
-def send_proposal(proposal: dict) -> None:
-    """
-    Send a formatted trade proposal message.
+def _money(v) -> str:
+    try:
+        return f"${float(v):,.2f}"
+    except (TypeError, ValueError):
+        return "—"
 
-    Expected proposal keys: asset, strategy, signal, timeframe,
-    entry, target, stop_loss, leverage, confidence, risk_reward,
-    motivation (optional 1-line reason).
+
+def _sizing_lines(proposal: dict) -> list[str]:
+    """Build the 'how much am I investing' block, if sizing info is available.
+
+    Reads size_usd (notional), leverage, margin_usd, risk_usd, risk_pct. Derives
+    margin from size_usd/leverage and risk from risk_pct*equity when not given.
+    Returns [] when there is no size to show (graceful degradation)."""
+    size_usd = proposal.get("size_usd", proposal.get("size"))
+    if size_usd is None:
+        return []
+    try:
+        size_usd = float(size_usd)
+    except (TypeError, ValueError):
+        return []
+
+    lev = proposal.get("leverage") or 1
+    margin = proposal.get("margin_usd")
+    if margin is None:
+        try:
+            margin = size_usd / float(lev)
+        except (TypeError, ValueError, ZeroDivisionError):
+            margin = None
+
+    risk_usd = proposal.get("risk_usd")
+    if risk_usd is None and proposal.get("risk_pct") and proposal.get("equity"):
+        try:
+            risk_usd = float(proposal["risk_pct"]) * float(proposal["equity"])
+        except (TypeError, ValueError):
+            risk_usd = None
+
+    risk_pct = proposal.get("risk_pct")
+    risk_pct_str = f" ({float(risk_pct)*100:.1f}% equity)" if risk_pct else ""
+
+    lines = ["", f"💰 *Investito (notional):* {_money(size_usd)}"]
+    if margin is not None:
+        lines.append(f"🔒 *Margine impegnato:* {_money(margin)}")
+    if risk_usd is not None:
+        lines.append(f"⚠️ *Rischio se tocca SL:* {_money(risk_usd)}{risk_pct_str}")
+    return lines
+
+
+def format_proposal(proposal: dict) -> str:
+    """Build the full trade-proposal message (Markdown). Single source of truth so
+    the sent message and the --test preview never diverge.
+
+    Expected keys: asset, strategy, signal, timeframe, entry, target, stop_loss,
+    leverage, confidence, risk_reward, motivation (optional). Sizing keys
+    (size_usd, margin_usd, risk_usd, risk_pct, equity) are shown when present.
     """
-    token, chat_id = _creds()
     side_emoji = "🟢" if proposal.get("signal") == "long" else "🔴"
     rr   = proposal.get("risk_reward") or proposal.get("rr")
     rr_str = f"{rr:.2f}" if rr is not None else "—"
@@ -177,6 +223,9 @@ def send_proposal(proposal: dict) -> None:
         f"*Take Profit:* {proposal.get('target', '?')}",
         f"*Stop Loss:*  {proposal.get('stop_loss', '?')}",
         f"*Leverage:*   {proposal.get('leverage', 1)}x",
+    ]
+    lines += _sizing_lines(proposal)
+    lines += [
         "",
         f"*Confidence:* {conf_str}",
         f"*Risk/Reward:* {rr_str}",
@@ -188,7 +237,13 @@ def send_proposal(proposal: dict) -> None:
         "Rispondi *accetta* / *ok* / *yes* per approvare.",
         "Qualsiasi altra risposta o silenzio entro 30 min = rifiuto.",
     ]
-    _do_send(token, chat_id, "\n".join(lines))
+    return "\n".join(lines)
+
+
+def send_proposal(proposal: dict) -> None:
+    """Send a formatted trade proposal message."""
+    token, chat_id = _creds()
+    _do_send(token, chat_id, format_proposal(proposal))
 
 
 def wait_response(timeout_minutes: int = 30) -> bool:
@@ -295,13 +350,19 @@ _TEST_PROPOSAL = {
     "strategy":    "momentum-trading",
     "asset":       "BTC",
     "signal":      "long",
-    "timeframe":   "1h",
+    "timeframe":   "15m",
     "entry":       67_420.0,
-    "target":      71_000.0,
-    "stop_loss":   65_800.0,
-    "leverage":    2,
+    "target":      68_500.0,
+    "stop_loss":   66_800.0,
+    "leverage":    10,
     "confidence":  0.72,
-    "risk_reward": 2.21,
+    "risk_reward": 1.74,
+    # Sizing (normalmente iniettato dalla routine prima della notifica):
+    "equity":      10_000.0,
+    "risk_pct":    0.04,
+    "size_usd":    43_496.77,   # 400$ rischio / 620$ stop-dist × 67420 entry
+    "margin_usd":  4_349.68,    # size_usd / 10x
+    "risk_usd":    400.0,
     "motivation":  "Breakout sopra 20-day high con volume 1.4x — RSI 63, MACD positivo.",
 }
 
@@ -324,28 +385,7 @@ if __name__ == "__main__":
         sys.stdout.reconfigure(encoding="utf-8")
         prop = _TEST_PROPOSAL
         print("=== MODALITÀ TEST — messaggio che verrà inviato ===")
-        # Build and print the message locally without sending
-        side_emoji = "🟢" if prop.get("signal") == "long" else "🔴"
-        rr     = prop.get("risk_reward")
-        rr_str = f"{rr:.2f}" if rr is not None else "—"
-        conf   = f"{round(prop.get('confidence', 0) * 100, 1)}%"
-        mot    = prop.get("motivation", "")
-        lines  = [
-            f"🔔 Liquid Bot — Nuova Proposta {side_emoji}",
-            f"Strategia:   {prop['strategy']}",
-            f"Asset:       {prop['asset']}",
-            f"Side:        {prop['signal'].upper()}",
-            f"Timeframe:   {prop['timeframe']}",
-            f"Entry:       {prop['entry']}",
-            f"Take Profit: {prop['target']}",
-            f"Stop Loss:   {prop['stop_loss']}",
-            f"Leverage:    {prop['leverage']}x",
-            f"Confidence:  {conf}",
-            f"Risk/Reward: {rr_str}",
-        ]
-        if mot:
-            lines.append(f"Motivazione: {mot}")
-        print("\n".join(lines))
+        print(format_proposal(prop))  # same builder as the real send
         print("===================================================")
 
         _load_dotenv()  # honor credentials stored in .env, not just shell env
