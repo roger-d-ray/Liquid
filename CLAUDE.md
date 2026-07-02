@@ -37,7 +37,15 @@ Dopo approvazione Telegram (exit code 0 da telegram_notify.py):
    - sl: stop_loss
    - reasoning: stringa con la motivazione tecnica sintetica
 
-   ⚠️ **La size va calcolata PRIMA della notifica, non dopo l'approvazione**, così il messaggio Telegram mostra quanto stai investendo. Usa `sizing.compute_size(equity, risk_pct, entry, stop_loss, leverage)` (equity da `get_portfolio()`), poi scrivi `size_usd`, `margin_usd`, `risk_usd`, `equity`, `risk_pct` nel proposal PRIMA di chiamare `telegram_notify.py`. `send_proposal`/`format_proposal` mostrano il blocco "💰 Investito / 🔒 Margine / ⚠️ Rischio se SL". Alla conferma, passa a `execute_order()` lo **stesso** `size_usd` mostrato (unica fonte di verità: nessuna divergenza tra ciò che approvi e ciò che viene eseguito).
+   ⚠️ **La size va calcolata PRIMA della notifica, non dopo l'approvazione**, così il messaggio Telegram mostra quanto stai investendo. Usa `sizing.plan_trade(proposal, snapshot)` (snapshot = `portfolio.from_coinvest(get_portfolio())`, con `total_equity`/`available_balance`/`positions`). `plan_trade`:
+   - calcola `size_usd` (notionale), `margin_usd`, `risk_usd`;
+   - se il margine del nuovo trade **non rientra** nel budget (cap per-asset 40% / totale 60% / disponibile), **alza la leva** fino al tetto utile (≤ MAX_LEVERAGE e ≤ tetto liq-safe) per farlo rientrare;
+   - se non rientra **neanche** alla leva massima utile, ritorna `fits=False`.
+
+   Comportamento richiesto:
+   - Se `fits=False`: **NON notificare**. Invia `python telegram_notify.py --message "❌ Trade scartato (margine): <reason>"`, logga `{"result":"discarded_margin","reason":...}`, prosegui.
+   - Se `fits=True`: scrivi nel proposal `size_usd`, `margin_usd`, `risk_usd`, `equity`, `risk_pct`, `leverage` (la leva **finale**, eventualmente alzata), e — se `adjusted=True` — anche `requested_leverage` e `adjusted` (così la proposta mostra "⚙️ Leva adattata"). Poi chiama `telegram_notify.py`.
+   - `send_proposal`/`format_proposal` mostrano "💰 Investito / 🔒 Margine / ⚠️ Rischio se SL" (+ eventuale nota leva). Alla conferma, passa a `execute_order()` lo **stesso** `size_usd` e la **stessa** `leverage` finale (unica fonte di verità: nessuna divergenza tra ciò che approvi e ciò che viene eseguito).
 2. Dopo execute_order(), chiama `get_portfolio()` e costruisci il messaggio Telegram:
 
    ✅ Trade eseguito! [emoji] [ASSET] [SIGNAL.upper()] · [leverage]x · $[size]

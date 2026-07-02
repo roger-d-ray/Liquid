@@ -194,6 +194,16 @@ def _sizing_lines(proposal: dict) -> list[str]:
         lines.append(f"🔒 *Margine impegnato:* {_money(margin)}")
     if risk_usd is not None:
         lines.append(f"⚠️ *Rischio se tocca SL:* {_money(risk_usd)}{risk_pct_str}")
+    # Note when the guard raised leverage to fit the margin budget, so the shown
+    # leverage differs from what the strategy proposed — transparency for approval.
+    if proposal.get("adjusted") and proposal.get("requested_leverage"):
+        try:
+            req = float(proposal["requested_leverage"])
+            lev = float(proposal.get("leverage") or req)
+            if lev > req:
+                lines.append(f"⚙️ *Leva adattata:* {req:g}x → {lev:g}x per rientrare nel margine")
+        except (TypeError, ValueError):
+            pass
     return lines
 
 
