@@ -18,7 +18,9 @@ Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 5. Se risposta è "accetta", chiama execute_order() di Co-Invest (esecuzione diretta — la conferma Telegram è l'unica autorizzazione richiesta)
    Subito dopo l'esecuzione, chiama get_portfolio() e invia su Telegram un messaggio di conferma con riepilogo portafoglio (equity, margine usato, disponibile, posizioni aperte)
 6. Logga il risultato in logs/proposals.jsonl
-7. **Aggiorna sempre lo snapshot del portafoglio** (per il comando /portfolio), anche nei run senza trade: `get_portfolio()` → `portfolio.from_coinvest(gp)` → `portfolio.save_portfolio_state(snap)`. Così /portfolio resta fresco ad ogni ciclo (vedi sezione dedicata).
+7. **Aggiorna lo snapshot E fai il push del portafoglio su Telegram** (ad ogni run, anche senza trade):
+   - `get_portfolio()` → `portfolio.from_coinvest(gp)` → `portfolio.save_portfolio_state(snap)`.
+   - **Allega SEMPRE il riepilogo portafoglio al messaggio Telegram di fine run** (quello di trade eseguito / rifiutato / "nessun setup"). Usa `portfolio.build_portfolio_message()` o una riga compatta (equity, disponibile, margine, N posizioni). Questo è il modello **push** che sostituisce il poller `/portfolio` (vedi sezione dedicata): niente processo persistente, portafoglio sempre fresco in chat.
 8. MAX 1 proposta per run (solo la migliore per confidence)
 
 ## Dettaglio STEP 5 — Esecuzione e notifica post-trade
@@ -73,11 +75,16 @@ Meccanismo che rende l'uscita intraday **100% automatica, senza intervento umano
   5. Se l'array è vuoto: nessuna chiusura, prosegui.
 - Lo STEP 0 non apre mai posizioni: chiude soltanto. È indipendente dalla proposta di trading (STEP 1-6).
 
-## Reset paper trading (comando Telegram)
+## Reset paper trading
 
-Comando on-demand per azzerare il paper account e ripartire da 10.000$. La conferma avviene **sempre su Telegram**.
+Azzera il paper account e riparte da 10.000$ via MCP `reset_paper_account()`.
 
-- **Perché due pezzi:** `reset_paper_account()` è un'azione **MCP**, quindi solo l'agente (routine) può eseguirla — `telegram_bot.py` non ha credenziali (come `/portfolio`). Il bot gestisce comando + conferma e **registra la richiesta** in un flag file; l'agente la esegue al ciclo successivo.
+- **ATTIVO (setup cloud attuale):** chiedilo a una **sessione Claude Code interattiva**. L'agente chiama `reset_paper_account()` via MCP (rifiuta in live per sicurezza), ricostruisce lo snapshot (`get_portfolio()` → `portfolio.from_coinvest` → `save_portfolio_state`) e conferma su Telegram. Immediato, nessun ponte a file.
+- **DORMIENTE (comando Telegram con conferma):** richiede `telegram_bot.py` su un host always-on che condivida il filesystem con la routine — non disponibile ora. Descritto sotto per quel caso.
+
+### (Dormiente) Comando Telegram con conferma
+
+- **Perché due pezzi:** `reset_paper_account()` è un'azione **MCP**, quindi solo l'agente (routine) può eseguirla — `telegram_bot.py` non ha credenziali (come `/portfolio`). Il bot gestisce comando + conferma e **registra la richiesta** in un flag file; l'agente la esegue al ciclo successivo. ⚠️ Questo funziona solo se poller e routine condividono il filesystem (stessa macchina); con la routine nel cloud, usa il percorso interattivo sopra.
 - **Lato bot (`telegram_bot.py`):**
   1. L'utente invia `reset paper trading` (o `/reset_paper`). Il bot risponde chiedendo conferma.
   2. L'utente invia `CONFERMA RESET` (o `/conferma_reset`) entro 2 minuti → il bot chiama `paper_reset.request_reset()` che scrive `data/reset_request.json`.
@@ -101,9 +108,17 @@ Comando on-demand per azzerare il paper account e ripartire da 10.000$. La confe
 - Nessuna credenziale nel codice: leggi sempre da variabili d'ambiente
 - Le skill in skills/ sono la fonte di verità: non ignorarle mai
 
-## Comando Telegram /portfolio (sola lettura)
+## Portafoglio su Telegram — modello PUSH (attivo) vs poller /portfolio (dormiente)
 
-Comando on-demand per consultare il portafoglio, **separato dal flusso di trading (STEP 0–6)**: non esegue, modifica o chiude mai ordini.
+⚠️ **Architettura attuale: routine nel CLOUD, nessun host always-on.** Il poller persistente (`telegram_bot.py`) e il ponte a file richiedono che lettore e scrittore stiano sulla **stessa macchina** — condizione non soddisfatta (routine cloud, `data/` git-ignored non attraversa git). Quindi:
+
+- **ATTIVO — push del portafoglio (STEP 7):** ad ogni run la routine allega il riepilogo del portafoglio al messaggio Telegram che già invia. Nessun processo persistente, nessun 409, portafoglio fresco ogni ~60 min. Questo è il meccanismo in uso.
+- **DORMIENTE — poller `/portfolio` (`telegram_bot.py`):** funziona solo con un host always-on che condivide il filesystem con la routine. Tenuto per uso futuro; NON attivo con il setup cloud attuale. La sezione qui sotto lo descrive per quel caso.
+- **Reset paper:** senza poller, il comando Telegram non ha esecutore. Reset affidabile = chiederlo a una **sessione Claude Code interattiva** (reset immediato via MCP `reset_paper_account`). Vedi sezione "Reset paper trading".
+
+### (Dormiente) Comando Telegram /portfolio (sola lettura)
+
+Comando on-demand per consultare il portafoglio, **separato dal flusso di trading (STEP 0–6)**: non esegue, modifica o chiude mai ordini. Richiede `telegram_bot.py` in esecuzione su un host always-on (vedi nota sopra).
 
 - Listener: `telegram_bot.py` — processo **persistente** che fa long-poll di `getUpdates` e risponde ai comandi. Comandi: `/portfolio`, `/help`, `/start`.
 - Avvio: `python telegram_bot.py` (Ctrl-C per fermare). `--once` esegue un solo ciclo di poll (test).
