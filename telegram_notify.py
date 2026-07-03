@@ -189,11 +189,14 @@ def _sizing_lines(proposal: dict) -> list[str]:
     risk_pct = proposal.get("risk_pct")
     risk_pct_str = f" ({float(risk_pct)*100:.1f}% equity)" if risk_pct else ""
 
-    lines = ["", f"💰 *Investito (notional):* {_money(size_usd)}"]
+    # These three are COMPUTED before execution (from the intended entry / sizing),
+    # so they are estimates: the real filled values on Liquid differ (market-order
+    # slippage, fees, size rounding). Labelled "(stima)" to avoid confusion.
+    lines = ["", f"💰 *Investito (stima):* {_money(size_usd)}"]
     if margin is not None:
-        lines.append(f"🔒 *Margine impegnato:* {_money(margin)}")
+        lines.append(f"🔒 *Margine impegnato (stima):* {_money(margin)}")
     if risk_usd is not None:
-        lines.append(f"⚠️ *Rischio se tocca SL:* {_money(risk_usd)}{risk_pct_str}")
+        lines.append(f"⚠️ *Rischio se tocca SL (stima):* {_money(risk_usd)}{risk_pct_str}")
     # Note when the guard raised leverage to fit the margin budget, so the shown
     # leverage differs from what the strategy proposed — transparency for approval.
     if proposal.get("adjusted") and proposal.get("requested_leverage"):
@@ -229,7 +232,7 @@ def format_proposal(proposal: dict) -> str:
         f"*Side:*       {proposal.get('signal', '?').upper()}",
         f"*Timeframe:*  {proposal.get('timeframe', '?')}",
         "",
-        f"*Entry:*      {proposal.get('entry', '?')}",
+        f"*Entry (stima):* {proposal.get('entry', '?')}",
         f"*Take Profit:* {proposal.get('target', '?')}",
         f"*Stop Loss:*  {proposal.get('stop_loss', '?')}",
         f"*Leverage:*   {proposal.get('leverage', 1)}x",
