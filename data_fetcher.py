@@ -35,6 +35,9 @@ TIMEFRAME_CONFIG = {
     "1d":  {"granularity": 86400, "limit": 60},
 }
 
+REQUIRED_SIGNAL_TIMEFRAMES = ("15m", "1h")
+REQUIRED_INDICATOR_KEYS = ("atr", "adx", "rsi", "ema9", "ema21", "ema50", "vol_ratio")
+
 # ─── Coinbase OHLCV (public, no auth) — FALLBACK source ──────────────────────
 # Coinbase rejects some datacenter IPs (HTTP 403), so it now sits behind Kraken
 # as the automatic fallback; it works fine for local runs.
@@ -538,6 +541,36 @@ def compute_indicators(candles: list) -> dict:
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+def validate_signal_ready_output(output: dict) -> None:
+    """Fail fast when JSON is not usable for the 15m/1h trading routine."""
+    errors = []
+    for asset in ASSETS:
+        asset_data = output.get("assets", {}).get(asset) or {}
+        live = asset_data.get("live") or {}
+        if live.get("price") is None:
+            errors.append(f"{asset}: live.price mancante")
+
+        for tf in REQUIRED_SIGNAL_TIMEFRAMES:
+            candles = asset_data.get("timeframes", {}).get(tf) or []
+            indicators = asset_data.get("indicators", {}).get(tf) or {}
+            if not candles:
+                errors.append(f"{asset} {tf}: candles mancanti")
+                continue
+            if not indicators:
+                errors.append(f"{asset} {tf}: indicatori mancanti")
+                continue
+            missing_keys = [k for k in REQUIRED_INDICATOR_KEYS if k not in indicators]
+            if missing_keys:
+                errors.append(
+                    f"{asset} {tf}: indicatori senza chiavi {', '.join(missing_keys)}"
+                )
+
+    if errors:
+        raise RuntimeError(
+            "market_data.json non pronto per segnali intraday: " + "; ".join(errors)
+        )
+
+
 def main():
     output = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -576,6 +609,8 @@ def main():
             print(f"ERROR: {e}")
 
         output["assets"][asset] = asset_data
+
+    validate_signal_ready_output(output)
 
     out_path = Path(__file__).parent / "data" / "market_data.json"
     out_path.parent.mkdir(exist_ok=True)

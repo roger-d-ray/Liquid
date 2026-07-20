@@ -111,16 +111,17 @@ def _api(token: str, method: str, payload: dict = None, *,
     raise RuntimeError(f"Telegram {method} failed after {MAX_RETRIES} attempts: {last_exc}")
 
 
-def _clear_conflicts(token: str) -> None:
+def _clear_conflicts(token: str, drop_pending_updates: bool = True) -> None:
     """Best-effort recovery from HTTP 409. A 409 means another consumer — a
     leftover webhook, or a second polling process — is holding the bot's update
     stream. `deleteWebhook` removes the webhook case (and `drop_pending_updates`
     clears the stale backlog) so a fresh getUpdates long-poll can take over. It is
     harmless if no webhook is set, and safe to call repeatedly."""
     try:
-        _api(token, "deleteWebhook", {"drop_pending_updates": True},
+        _api(token, "deleteWebhook", {"drop_pending_updates": drop_pending_updates},
              clear_on_conflict=False)
-        print("[telegram] deleteWebhook OK (webhook/coda ripuliti).")
+        action = "webhook/coda ripuliti" if drop_pending_updates else "webhook rimosso"
+        print(f"[telegram] deleteWebhook OK ({action}).")
     except Exception as e:
         print(f"[telegram] deleteWebhook fallito (ignoro): {e}")
 
@@ -259,7 +260,7 @@ def send_proposal(proposal: dict) -> None:
     _do_send(token, chat_id, format_proposal(proposal))
 
 
-def wait_response(timeout_minutes: int = 30) -> bool:
+def wait_response(timeout_minutes: int = 30, start_offset: int = None) -> bool:
     """
     Poll for a user reply. Returns True if the user accepts, False on
     timeout or any other reply. Polls every ~30 seconds via long-polling.
@@ -286,11 +287,13 @@ def wait_response(timeout_minutes: int = 30) -> bool:
     try:
         # Proactively release the update stream before we start, so the very
         # first getUpdates does not hit HTTP 409 (stale webhook / leftover poller).
-        _clear_conflicts(token)
+        _clear_conflicts(token, drop_pending_updates=False)
 
         # Resume from where the poller left off (so a reply arriving during the
         # handoff is not skipped); otherwise skip the stale backlog as before.
-        if poller_offset is not None:
+        if start_offset is not None:
+            offset = start_offset
+        elif poller_offset is not None:
             offset = poller_offset
         else:
             try:
@@ -313,13 +316,13 @@ def wait_response(timeout_minutes: int = 30) -> bool:
                     "offset":          offset,
                     "timeout":         poll_secs,
                     "allowed_updates": ["message"],
-                })
+                }, clear_on_conflict=False)
             except Exception as e:
                 msg = str(e)
                 print(f"[telegram] Errore polling: {msg}. Riprovo...")
                 # If the conflict persisted past the inner retries, clear again.
                 if "409" in msg or "Conflict" in msg:
-                    _clear_conflicts(token)
+                    _clear_conflicts(token, drop_pending_updates=False)
                 time.sleep(5)
                 continue
 
@@ -353,8 +356,14 @@ def wait_response(timeout_minutes: int = 30) -> bool:
 
 def notify_and_wait(proposal: dict, timeout_minutes: int = 30) -> bool:
     """Convenience: send_proposal + wait_response in one call."""
-    send_proposal(proposal)
-    return wait_response(timeout_minutes)
+    token, chat_id = _creds()
+    start_offset = None
+    try:
+        start_offset = _latest_offset(token)
+    except Exception as e:
+        print(f"[telegram] Offset pre-proposta non leggibile ({e}); uso handoff standard.")
+    _do_send(token, chat_id, format_proposal(proposal))
+    return wait_response(timeout_minutes, start_offset=start_offset)
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────

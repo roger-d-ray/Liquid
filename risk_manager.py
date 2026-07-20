@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from proposal_schema import ProposalSchemaError, normalize_proposal
+
 
 # ─── Data structures ──────────────────────────────────────────────────────────
 
@@ -594,7 +596,22 @@ class RiskManager:
     def validate(self, proposal: dict | Proposal) -> ValidationResult:
         if isinstance(proposal, dict):
             raw = proposal.copy()
-            p   = Proposal.from_dict(proposal)
+            try:
+                normalised = normalize_proposal(proposal)
+            except ProposalSchemaError as e:
+                try:
+                    confidence = float(proposal.get("confidence", 0.0))
+                except (TypeError, ValueError):
+                    confidence = 0.0
+                r = ValidationResult(
+                    approved=False,
+                    confidence=confidence,
+                    original=raw,
+                    rejection_reason=str(e),
+                )
+                self._log(r)
+                return r
+            p = Proposal.from_dict(normalised)
         else:
             p   = proposal
             raw = {f: getattr(p, f) for f in p.__dataclass_fields__}
