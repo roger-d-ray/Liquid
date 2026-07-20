@@ -158,6 +158,17 @@ def _money(v) -> str:
         return "—"
 
 
+def _md_escape(text) -> str:
+    """Escape legacy-Markdown control chars in free-text values so they don't
+    open dangling entities. Strategy names like 'momentum_trading' and any
+    motivation string can contain _, *, `, [ — a lone one breaks the whole
+    sendMessage with HTTP 400 'can't find end of the entity'."""
+    s = str(text)
+    for ch in ("_", "*", "`", "["):
+        s = s.replace(ch, "\\" + ch)
+    return s
+
+
 def _sizing_lines(proposal: dict) -> list[str]:
     """Build the 'how much am I investing' block, if sizing info is available.
 
@@ -220,7 +231,7 @@ def format_proposal(proposal: dict) -> str:
     (size_usd, margin_usd, risk_usd, risk_pct, equity) are shown when present.
     """
     side_emoji = "🟢" if proposal.get("signal") == "long" else "🔴"
-    rr   = proposal.get("risk_reward") or proposal.get("rr")
+    rr   = proposal.get("risk_reward") or proposal.get("rr") or proposal.get("rr_ratio")
     rr_str = f"{rr:.2f}" if rr is not None else "—"
     conf_str = f"{round(proposal.get('confidence', 0) * 100, 1)}%"
     motivation = proposal.get("motivation") or proposal.get("reason") or ""
@@ -228,7 +239,7 @@ def format_proposal(proposal: dict) -> str:
     lines = [
         f"🔔 *Liquid Bot — Nuova Proposta* {side_emoji}",
         "",
-        f"*Strategia:*  {proposal.get('strategy', '?')}",
+        f"*Strategia:*  {_md_escape(proposal.get('strategy', '?'))}",
         f"*Asset:*      {proposal.get('asset', '?')}",
         f"*Side:*       {proposal.get('signal', '?').upper()}",
         f"*Timeframe:*  {proposal.get('timeframe', '?')}",
@@ -245,7 +256,7 @@ def format_proposal(proposal: dict) -> str:
         f"*Risk/Reward:* {rr_str}",
     ]
     if motivation:
-        lines += ["", f"_{motivation}_"]
+        lines += ["", f"_{_md_escape(motivation)}_"]
     lines += [
         "",
         "Rispondi *accetta* / *ok* / *yes* per approvare.",
