@@ -228,7 +228,7 @@ def format_proposal(proposal: dict) -> str:
     lines = [
         f"🔔 *Liquid Bot — Nuova Proposta* {side_emoji}",
         "",
-        f"*Strategia:*  {proposal.get('strategy', '?')}",
+        f"*Strategia:*  {str(proposal.get('strategy', '?')).replace('_', '-')}",
         f"*Asset:*      {proposal.get('asset', '?')}",
         f"*Side:*       {proposal.get('signal', '?').upper()}",
         f"*Timeframe:*  {proposal.get('timeframe', '?')}",
