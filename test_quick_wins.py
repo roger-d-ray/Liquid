@@ -7,8 +7,10 @@ from unittest.mock import patch
 import data_fetcher
 import intraday_exit
 import manage_positions
+import paper_reset
 import risk_manager
 import telegram_notify
+import trading_mode
 
 
 class RiskManagerSchemaTests(unittest.TestCase):
@@ -222,6 +224,49 @@ class IntradayExitTests(unittest.TestCase):
         actions = intraday_exit.positions_to_flatten(snapshot, now=now)
         self.assertEqual(actions[0]["symbol"], "BTC-PERP")
         self.assertIn("end-of-day", actions[0]["reason"])
+
+
+class TradingModeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="liquid-mode-tests-"))
+        self.old_request_path = paper_reset.REQUEST_PATH
+        self.old_env_path = trading_mode.ENV_PATH
+        paper_reset.REQUEST_PATH = self.tmp / "reset_request.json"
+        trading_mode.ENV_PATH = self.tmp / "missing.env"
+
+    def tearDown(self):
+        paper_reset.REQUEST_PATH = self.old_request_path
+        trading_mode.ENV_PATH = self.old_env_path
+
+    def test_default_mode_is_paper_and_live_actions_are_blocked(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(trading_mode.trading_mode(), "paper")
+            with self.assertRaises(trading_mode.TradingModeError):
+                trading_mode.require_live_trading_enabled("test ordine")
+
+    def test_live_requires_second_switch(self):
+        with patch.dict("os.environ", {"TRADING_MODE": "live"}, clear=True):
+            with self.assertRaises(trading_mode.TradingModeError):
+                trading_mode.require_live_trading_enabled("test ordine")
+
+        with patch.dict(
+            "os.environ",
+            {"TRADING_MODE": "live", "LIVE_TRADING_ALLOWED": "true"},
+            clear=True,
+        ):
+            self.assertTrue(trading_mode.require_live_trading_enabled("test ordine"))
+
+    def test_paper_reset_is_disabled_in_live_mode(self):
+        with patch.dict(
+            "os.environ",
+            {"TRADING_MODE": "live", "LIVE_TRADING_ALLOWED": "true"},
+            clear=True,
+        ):
+            with self.assertRaises(trading_mode.TradingModeError):
+                paper_reset.request_reset(requested_by="test")
+            paper_reset.REQUEST_PATH.parent.mkdir(exist_ok=True)
+            paper_reset.REQUEST_PATH.write_text("{}", encoding="utf-8")
+            self.assertIsNone(paper_reset.pending())
 
 
 if __name__ == "__main__":

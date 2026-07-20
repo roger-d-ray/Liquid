@@ -44,6 +44,7 @@ from telegram_notify import (
 from portfolio import PortfolioUnavailable, build_portfolio_message
 import paper_reset
 import telegram_lock as lock
+import trading_mode
 
 # How long the user has to confirm a paper-reset after asking for it (seconds).
 _RESET_CONFIRM_WINDOW = 120
@@ -83,6 +84,11 @@ def _handle_portfolio(token: str, chat_id: str) -> None:
 
 def _handle_reset_request(token: str, chat_id: str) -> None:
     """Arm a paper-reset and ask the user to confirm — on Telegram."""
+    try:
+        trading_mode.require_paper_trading_enabled("richiesta reset paper")
+    except trading_mode.TradingModeError as e:
+        _do_send(token, chat_id, f"⛔ Reset paper bloccato: {e}")
+        return
     _pending_reset[chat_id] = time.time()
     print("[bot] richiesta reset paper — in attesa di conferma")
     _do_send(
@@ -104,7 +110,11 @@ def _handle_reset_confirm(token: str, chat_id: str) -> None:
             "Invia di nuovo _reset paper trading_ per ricominciare.",
         )
         return
-    req = paper_reset.request_reset(requested_by=f"telegram:{chat_id}")
+    try:
+        req = paper_reset.request_reset(requested_by=f"telegram:{chat_id}")
+    except trading_mode.TradingModeError as e:
+        _do_send(token, chat_id, f"⛔ Reset paper bloccato: {e}")
+        return
     print(f"[bot] reset paper confermato e messo in coda: {req}")
     _do_send(
         token, chat_id,

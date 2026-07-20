@@ -26,11 +26,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import trading_mode
+
 REQUEST_PATH = Path(__file__).parent / "data" / "reset_request.json"
 
 
 def request_reset(requested_by: str = "telegram", note: str = "") -> dict:
     """Persist a pending-reset request. Overwrites any earlier one (idempotent)."""
+    trading_mode.require_paper_trading_enabled("richiesta reset paper")
     REQUEST_PATH.parent.mkdir(exist_ok=True)
     payload = {
         "requested_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -43,6 +46,8 @@ def request_reset(requested_by: str = "telegram", note: str = "") -> dict:
 
 def pending() -> Optional[dict]:
     """Return the queued reset request, or None if there isn't one."""
+    if trading_mode.is_live_mode():
+        return None
     if not REQUEST_PATH.exists():
         return None
     try:

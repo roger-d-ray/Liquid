@@ -6,6 +6,31 @@ Bot quantitativo crypto che analizza BTC, ETH e SOL ogni 60min.
 Identifica opportunità con le 3 skill in skills/.
 Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 
+## Modalita account Liquid
+
+La routine locale deve dichiarare esplicitamente se sta operando in paper o in
+live tramite `.env`:
+
+    TRADING_MODE=paper|live
+    LIVE_TRADING_ALLOWED=false|true
+
+Default sicuro: se le variabili mancano, considera `TRADING_MODE=paper`.
+
+Per passare a soldi reali:
+
+1. In Co-Invest/Liquid, chiedi esplicitamente di tornare al live trading e
+   verifica lo stato con il connector (`paper_trading_status()` o richiesta
+   equivalente tipo "am I in paper or live?").
+2. Solo dopo avere confermato che Co-Invest e' in live, imposta localmente:
+   `TRADING_MODE=live` e `LIVE_TRADING_ALLOWED=true`.
+3. Prima di qualunque azione MCP che modifica il conto (`execute_order`,
+   `close_positions_batch`, modifica TP/SL o leva), esegui:
+   `python trading_mode.py --require-live`. Se fallisce, NON chiamare il tool MCP
+   e notifica Telegram con il motivo.
+
+In live mode il reset paper e' disabilitato: non chiamare mai
+`reset_paper_account()` e ignora eventuali flag `data/reset_request.json`.
+
 ## Flusso ad ogni run
 
 0. **Reset paper + Flatten intraday (PRIMA di tutto):**
@@ -16,7 +41,7 @@ Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 2. Leggi market_data.json e applica le 3 skill
 3. Per il segnale migliore (confidence più alta), esegui risk_manager.py
 4. Se approvato, invia notifica Telegram con telegram_notify.py
-5. Se risposta è "accetta", chiama execute_order() di Co-Invest (esecuzione diretta — la conferma Telegram è l'unica autorizzazione richiesta)
+5. Se risposta è "accetta", esegui `python trading_mode.py --require-live`; solo se passa chiama execute_order() di Co-Invest (esecuzione diretta — la conferma Telegram è l'unica autorizzazione richiesta)
    Subito dopo l'esecuzione, chiama get_portfolio() e invia su Telegram un messaggio di conferma con riepilogo portafoglio (equity, margine usato, disponibile, posizioni aperte)
 6. Logga il risultato in logs/proposals.jsonl
 7. **Aggiorna lo snapshot E fai il push del portafoglio su Telegram** (ad ogni run, anche senza trade):
@@ -28,7 +53,7 @@ Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 
 Dopo approvazione Telegram (exit code 0 da telegram_notify.py):
 
-1. Chiama `execute_order()` via Co-Invest MCP con i parametri validati dal risk_manager:
+1. Esegui `python trading_mode.py --require-live`, poi chiama `execute_order()` via Co-Invest MCP con i parametri validati dal risk_manager:
    - symbol: asset (es. "BTC")
    - side: "buy" (long) o "sell" (short)
    - size: notionale in USD. Dimensiona sul RISCHIO, non sulla leva: `rischio_$ = risk_pct × equity` (risk_pct = 3–5%, vedi Modalità intraday), poi `size_coin = rischio_$ / |entry − stop_loss|`, `size = size_coin × entry`. La leva NON entra nel calcolo del rischio: determina solo il margine impegnato (`margine = size / leverage`) e la distanza di liquidazione.
@@ -85,8 +110,8 @@ Meccanismo che evita il vecchio max-hold cieco: prima di chiudere per tempo, gua
 - **Esecuzione (agente, via MCP):**
   1. `gp = get_portfolio()` → `portfolio.save_portfolio_state(portfolio.from_coinvest(gp))`.
   2. `python manage_positions.py` → leggi l'array JSON.
-  3. Per ogni `modify_sl`, chiama il tool MCP di modifica posizione aggiornando solo lo stop loss e preservando take profit, size e lato riportati dall'azione.
-  4. Raggruppa tutte le azioni `close` e chiudi con una sola `close_positions_batch(confirmed=true, symbols=[...])`.
+  3. Per ogni `modify_sl`, esegui `python trading_mode.py --require-live`, poi chiama il tool MCP di modifica posizione aggiornando solo lo stop loss e preservando take profit, size e lato riportati dall'azione.
+  4. Raggruppa tutte le azioni `close`; prima di chiudere esegui `python trading_mode.py --require-live`, poi chiudi con una sola `close_positions_batch(confirmed=true, symbols=[...])`.
   5. Se hai modificato o chiuso qualcosa: ri-esegui `get_portfolio()`, salva lo snapshot e notifica Telegram con elenco azioni e motivi.
   6. Poi esegui comunque il flatten finale (`intraday_exit.py`), perché la garanzia zero overnight resta separata.
 
@@ -101,7 +126,7 @@ Meccanismo che rende l'uscita intraday **100% automatica, senza intervento umano
 - **Esecuzione (agente, via MCP):** la chiusura vera è un'azione MCP. ⚠️ L'UNICO tool di chiusura chiamabile dall'agente è **`close_positions_batch`**. Il tool singolare `close_position` è SYSTEM INTERNAL e **non va MAI chiamato** dall'agente. `close_positions_batch` è pre-autorizzato dalla policy intraday (stessa logica di `execute_order`: la policy sostituisce il widget di conferma). Lo STEP 0 è:
   1. `gp = get_portfolio()` → `portfolio.save_portfolio_state(portfolio.from_coinvest(gp))` (aggiorna lo snapshot con lo stato reale).
   2. `python intraday_exit.py` → leggi l'array JSON su stdout: `[{"symbol":"BTC-PERP","asset":"BTC","side":"long","reason":"..."}]`.
-  3. Se l'array NON è vuoto, chiudi via Co-Invest MCP con **una sola** chiamata:
+  3. Se l'array NON è vuoto, esegui `python trading_mode.py --require-live`, poi chiudi via Co-Invest MCP con **una sola** chiamata:
      `close_positions_batch(confirmed=true, symbols=[<lista dei "symbol" perp dell'array>])`.
      (I `symbol` sono in formato perp, es. "BTC-PERP" — passa quelli, non l'`asset`. Con `symbols` omesso chiuderebbe TUTTE le posizioni: passa sempre la lista esplicita.)
   4. Se hai chiuso qualcosa: ri-esegui `get_portfolio()`, ri-salva lo snapshot, e notifica su Telegram (`python telegram_notify.py --message "..."`) con l'elenco di cosa è stato flattato e il motivo.
@@ -111,6 +136,10 @@ Meccanismo che rende l'uscita intraday **100% automatica, senza intervento umano
 ## Reset paper trading
 
 Azzera il paper account e riparte da 10.000$ via MCP `reset_paper_account()`.
+
+Questo blocco vale solo quando `TRADING_MODE=paper`. In `TRADING_MODE=live`:
+`paper_reset.pending()` restituisce `None`, `paper_reset.request_reset()` rifiuta
+la richiesta, e l'agente non deve mai chiamare `reset_paper_account()`.
 
 - **ATTIVO (setup cloud attuale):** chiedilo a una **sessione Claude Code interattiva**. L'agente chiama `reset_paper_account()` via MCP (rifiuta in live per sicurezza), ricostruisce lo snapshot (`get_portfolio()` → `portfolio.from_coinvest` → `save_portfolio_state`) e conferma su Telegram. Immediato, nessun ponte a file.
 - **DORMIENTE (comando Telegram con conferma):** richiede `telegram_bot.py` su un host always-on che condivida il filesystem con la routine — non disponibile ora. Descritto sotto per quel caso.
@@ -124,7 +153,7 @@ Azzera il paper account e riparte da 10.000$ via MCP `reset_paper_account()`.
   3. Fuori finestra o senza richiesta attiva → conferma rifiutata, nessun flag.
 - **Lato agente (STEP 0a, ad ogni run):**
   1. `import paper_reset` → `req = paper_reset.pending()`. Se `None`, salta (nessun reset in coda).
-  2. Se c'è una richiesta: assicurati di essere in paper (`paper_trading_status()`; se necessario `enable_paper_trading()`), poi chiama **`reset_paper_account()`** via Co-Invest MCP.
+  2. Se c'è una richiesta: esegui `python trading_mode.py --require-paper`, assicurati di essere in paper (`paper_trading_status()`; se necessario `enable_paper_trading()`), poi chiama **`reset_paper_account()`** via Co-Invest MCP.
   3. Ricostruisci lo snapshot (`get_portfolio()` → `portfolio.save_portfolio_state(portfolio.from_coinvest(gp))`) così `/portfolio` mostra i 10.000$ freschi.
   4. Notifica su Telegram (`python telegram_notify.py --message "♻️ Paper account resettato: riparto da $10.000, nessuna posizione aperta."`).
   5. `paper_reset.clear()` per rimuovere il flag (altrimenti il reset si ripeterebbe ogni run).
@@ -139,6 +168,8 @@ Azzera il paper account e riparte da 10.000$ via MCP `reset_paper_account()`.
 - Leva mai oltre 20x: risk_manager.py rifiuta il proposal (MAX_LEVERAGE)
 - Analisi e segnale su 15m/1h, mai su 4h/1d (4h/1d = solo contesto)
 - Nessuna credenziale nel codice: leggi sempre da variabili d'ambiente
+- In live, prima di qualunque ordine/chiusura/modifica posizione deve passare `python trading_mode.py --require-live`
+- In live, il reset paper e' vietato: non chiamare `reset_paper_account()`
 - Le skill in skills/ sono la fonte di verità: non ignorarle mai
 
 ## Portafoglio su Telegram — modello PUSH (attivo) vs poller /portfolio (dormiente)
@@ -163,7 +194,7 @@ Comando on-demand per consultare il portafoglio, **separato dal flusso di tradin
 
 ### Per l'agente MCP: come popolare lo snapshot
 
-L'account Liquid è collegato **via Co-Invest MCP** (autenticato all'agente): `get_portfolio()` ritorna i dati reali dell'account (attualmente in **paper trading**). Gli script Python NON hanno chiavi API dell'exchange — l'unico ponte all'account è l'MCP, quindi **è l'agente** che deve popolare lo snapshot.
+L'account Liquid è collegato **via Co-Invest MCP** (autenticato all'agente): `get_portfolio()` ritorna i dati dell'account nella modalità attiva (paper o live). Gli script Python NON hanno chiavi API dell'exchange — l'unico ponte all'account è l'MCP, quindi **è l'agente** che deve popolare lo snapshot.
 
 Il mapping dei campi MCP (`entryPx`/`markPx`, `size` in unità coin, `displayName`) verso lo schema dello snapshot è già in `portfolio.py`. Non scrivere il JSON a mano: usa gli helper.
 
