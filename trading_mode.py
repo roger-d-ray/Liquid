@@ -30,8 +30,9 @@ class TradingModeError(RuntimeError):
     """Raised when an account-changing action is blocked by mode settings."""
 
 
-def _load_dotenv(path: Path = ENV_PATH) -> None:
+def _load_dotenv(path: Path | None = None) -> None:
     """Load simple KEY=VALUE lines from .env without overriding real env vars."""
+    path = ENV_PATH if path is None else path
     if not path.exists():
         return
     for line in path.read_text(encoding="utf-8").splitlines():

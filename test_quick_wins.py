@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -239,18 +240,18 @@ class TradingModeTests(unittest.TestCase):
         trading_mode.ENV_PATH = self.old_env_path
 
     def test_default_mode_is_paper_and_live_actions_are_blocked(self):
-        with patch.dict("os.environ", {}, clear=True):
+        with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(trading_mode.trading_mode(), "paper")
             with self.assertRaises(trading_mode.TradingModeError):
                 trading_mode.require_live_trading_enabled("test ordine")
 
     def test_live_requires_second_switch(self):
-        with patch.dict("os.environ", {"TRADING_MODE": "live"}, clear=True):
+        with patch.dict(os.environ, {"TRADING_MODE": "live"}, clear=True):
             with self.assertRaises(trading_mode.TradingModeError):
                 trading_mode.require_live_trading_enabled("test ordine")
 
         with patch.dict(
-            "os.environ",
+            os.environ,
             {"TRADING_MODE": "live", "LIVE_TRADING_ALLOWED": "true"},
             clear=True,
         ):
@@ -258,7 +259,7 @@ class TradingModeTests(unittest.TestCase):
 
     def test_paper_reset_is_disabled_in_live_mode(self):
         with patch.dict(
-            "os.environ",
+            os.environ,
             {"TRADING_MODE": "live", "LIVE_TRADING_ALLOWED": "true"},
             clear=True,
         ):

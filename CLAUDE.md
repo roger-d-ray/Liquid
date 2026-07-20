@@ -8,33 +8,28 @@ Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 
 ## Modalita account Liquid
 
-La routine locale deve dichiarare esplicitamente se sta operando in paper o in
-live tramite `.env`:
+Questa routine opera in **live trading**. La modalita deve essere gia dichiarata
+nel `.env` o nel runtime prima dell'avvio:
 
-    TRADING_MODE=paper|live
-    LIVE_TRADING_ALLOWED=false|true
+    TRADING_MODE=live
+    LIVE_TRADING_ALLOWED=true
 
-Default sicuro: se le variabili mancano, considera `TRADING_MODE=paper`.
+Default sicuro del codice: se le variabili mancano, considera `TRADING_MODE=paper`
+e blocca le azioni live.
 
-Per passare a soldi reali:
-
-1. In Co-Invest/Liquid, chiedi esplicitamente di tornare al live trading e
-   verifica lo stato con il connector (`paper_trading_status()` o richiesta
-   equivalente tipo "am I in paper or live?").
-2. Solo dopo avere confermato che Co-Invest e' in live, imposta localmente:
-   `TRADING_MODE=live` e `LIVE_TRADING_ALLOWED=true`.
-3. Prima di qualunque azione MCP che modifica il conto (`execute_order`,
+Prima di qualunque azione MCP che modifica il conto (`execute_order`,
    `close_positions_batch`, modifica TP/SL o leva), esegui:
-   `python trading_mode.py --require-live`. Se fallisce, NON chiamare il tool MCP
-   e notifica Telegram con il motivo.
+`python trading_mode.py --require-live`. Se fallisce, NON chiamare il tool MCP
+e notifica Telegram con il motivo.
 
-In live mode il reset paper e' disabilitato: non chiamare mai
-`reset_paper_account()` e ignora eventuali flag `data/reset_request.json`.
+Il reset paper e' disabilitato in questa routine: non chiamare mai
+`enable_paper_trading()` o `reset_paper_account()` e ignora eventuali flag
+`data/reset_request.json`.
 
 ## Flusso ad ogni run
 
-0. **Reset paper + Flatten intraday (PRIMA di tutto):**
-   - **0a. Reset paper (se richiesto):** controlla `paper_reset.pending()`. Se c'è una richiesta, esegui il reset via MCP — vedi sezione "Reset paper trading". Dopo il reset il conto è vuoto: salta il flatten e prosegui con un conto fresco.
+0. **Housekeeping live + Flatten intraday (PRIMA di tutto):**
+   - **0a. Reset paper:** vietato in live. Non chiamare `enable_paper_trading()` o `reset_paper_account()`. Ignora eventuali reset pending e prosegui.
    - **0b. Gestione posizioni aperte:** aggiorna lo snapshot e applica `manage_positions.py` — vedi sezione "Gestione intraday intelligente". Protegge profitti, chiude trade fermi e sostituisce il vecchio max-hold cieco.
    - **0c. Flatten intraday:** esegui `intraday_exit.py` come backstop finale anti-overnight — vedi sezione "Flatten automatico". Va eseguito ad ogni run, prima di cercare nuovi setup, così libera slot/esposizione e garantisce zero overnight.
 1. Esegui data_fetcher.py → genera data/market_data.json
@@ -133,32 +128,19 @@ Meccanismo che rende l'uscita intraday **100% automatica, senza intervento umano
   5. Se l'array è vuoto: nessuna chiusura, prosegui.
 - Lo STEP 0 non apre mai posizioni: chiude soltanto. È indipendente dalla proposta di trading (STEP 1-6).
 
-## Reset paper trading
+## Reset paper trading legacy
 
-Azzera il paper account e riparte da 10.000$ via MCP `reset_paper_account()`.
+Questa sezione e' solo documentazione legacy per manutenzione manuale fuori dalla
+routine live. La routine live NON deve usarla.
 
-Questo blocco vale solo quando `TRADING_MODE=paper`. In `TRADING_MODE=live`:
+In `TRADING_MODE=live`:
 `paper_reset.pending()` restituisce `None`, `paper_reset.request_reset()` rifiuta
 la richiesta, e l'agente non deve mai chiamare `reset_paper_account()`.
 
-- **ATTIVO (setup cloud attuale):** chiedilo a una **sessione Claude Code interattiva**. L'agente chiama `reset_paper_account()` via MCP (rifiuta in live per sicurezza), ricostruisce lo snapshot (`get_portfolio()` → `portfolio.from_coinvest` → `save_portfolio_state`) e conferma su Telegram. Immediato, nessun ponte a file.
-- **DORMIENTE (comando Telegram con conferma):** richiede `telegram_bot.py` su un host always-on che condivida il filesystem con la routine — non disponibile ora. Descritto sotto per quel caso.
+Se vuoi davvero azzerare un paper account, fallo solo in una sessione interattiva
+separata e solo dopo avere impostato esplicitamente `TRADING_MODE=paper`.
 
-### (Dormiente) Comando Telegram con conferma
-
-- **Perché due pezzi:** `reset_paper_account()` è un'azione **MCP**, quindi solo l'agente (routine) può eseguirla — `telegram_bot.py` non ha credenziali (come `/portfolio`). Il bot gestisce comando + conferma e **registra la richiesta** in un flag file; l'agente la esegue al ciclo successivo. ⚠️ Questo funziona solo se poller e routine condividono il filesystem (stessa macchina); con la routine nel cloud, usa il percorso interattivo sopra.
-- **Lato bot (`telegram_bot.py`):**
-  1. L'utente invia `reset paper trading` (o `/reset_paper`). Il bot risponde chiedendo conferma.
-  2. L'utente invia `CONFERMA RESET` (o `/conferma_reset`) entro 2 minuti → il bot chiama `paper_reset.request_reset()` che scrive `data/reset_request.json`.
-  3. Fuori finestra o senza richiesta attiva → conferma rifiutata, nessun flag.
-- **Lato agente (STEP 0a, ad ogni run):**
-  1. `import paper_reset` → `req = paper_reset.pending()`. Se `None`, salta (nessun reset in coda).
-  2. Se c'è una richiesta: esegui `python trading_mode.py --require-paper`, assicurati di essere in paper (`paper_trading_status()`; se necessario `enable_paper_trading()`), poi chiama **`reset_paper_account()`** via Co-Invest MCP.
-  3. Ricostruisci lo snapshot (`get_portfolio()` → `portfolio.save_portfolio_state(portfolio.from_coinvest(gp))`) così `/portfolio` mostra i 10.000$ freschi.
-  4. Notifica su Telegram (`python telegram_notify.py --message "♻️ Paper account resettato: riparto da $10.000, nessuna posizione aperta."`).
-  5. `paper_reset.clear()` per rimuovere il flag (altrimenti il reset si ripeterebbe ogni run).
-  6. Dopo il reset il conto è vuoto → salta il flatten (0b) e prosegui la routine normalmente.
-- Il flag vive in `data/` (git-ignored): resta locale, mai committato.
+Non includere istruzioni di reset paper nel prompt routine live.
 
 ## Regole assolute
 
@@ -178,7 +160,7 @@ la richiesta, e l'agente non deve mai chiamare `reset_paper_account()`.
 
 - **ATTIVO — push del portafoglio (STEP 7):** ad ogni run la routine allega il riepilogo del portafoglio al messaggio Telegram che già invia. Nessun processo persistente, nessun 409, portafoglio fresco ogni ~60 min. Questo è il meccanismo in uso.
 - **DORMIENTE — poller `/portfolio` (`telegram_bot.py`):** funziona solo con un host always-on che condivide il filesystem con la routine. Tenuto per uso futuro; NON attivo con il setup cloud attuale. La sezione qui sotto lo descrive per quel caso.
-- **Reset paper:** senza poller, il comando Telegram non ha esecutore. Reset affidabile = chiederlo a una **sessione Claude Code interattiva** (reset immediato via MCP `reset_paper_account`). Vedi sezione "Reset paper trading".
+- **Reset paper:** non disponibile nella routine live. Usare solo manutenzione manuale separata in `TRADING_MODE=paper`.
 
 ### (Dormiente) Comando Telegram /portfolio (sola lettura)
 
