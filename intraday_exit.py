@@ -13,20 +13,21 @@ prints the positions that must close; the agent closes each via the MCP
 close_position()/close_positions_batch(). No daemon, no human — as long as the
 routine keeps firing hourly, the flatten happens on its own.
 
-TWO INDEPENDENT RULES (a position matching EITHER is flattened)
---------------------------------------------------------------
+RULES
+-----
 1. End-of-day flatten (HARD GUARANTEE): at/after FLATTEN_HOUR_UTC every open
    position is closed, so nothing is ever carried overnight. This rule needs NO
    per-position timestamp, so it works even though the MCP snapshot may not carry
    an open time. This is the backstop that makes "closes within the day" true.
-2. Max-hold (BEST EFFORT): if the position's open time is known (opened_at in the
-   snapshot), close it once it has been open longer than MAX_HOLD_HOURS, so scalps
-   don't linger even mid-session. Silently inactive when the open time is absent.
+2. Legacy max-hold (OPTIONAL, default OFF): if FLATTEN_MAX_HOLD_HOURS is set to a
+   positive number and the position's open time is known, close it once it has
+   been open longer than that. The normal progress-aware max-hold now lives in
+   manage_positions.py so this module does not flatten good trades blindly.
 
-Both thresholds are overridable via environment variables so the policy can be
-tuned without editing code:
-    FLATTEN_HOUR_UTC   (default 23)   hour-of-day (UTC) at/after which all close
-    MAX_HOLD_HOURS     (default 6)    max holding time when opened_at is known
+Thresholds are overridable via environment variables so the policy can be tuned
+without editing code:
+    FLATTEN_HOUR_UTC       (default 23) hour-of-day (UTC) at/after which all close
+    FLATTEN_MAX_HOLD_HOURS (default 0)  optional legacy blind max-hold; 0 disables
 
 Output (CLI): a JSON array on stdout, one object per position to close:
     [{"symbol": "BTC-PERP", "asset": "BTC", "side": "long", "reason": "..."}]
@@ -53,7 +54,7 @@ import portfolio  # reuse the tolerant snapshot loader / schema
 # ─── Config (env-overridable) ─────────────────────────────────────────────────
 
 FLATTEN_HOUR_UTC = int(os.environ.get("FLATTEN_HOUR_UTC", "23"))
-MAX_HOLD_HOURS   = float(os.environ.get("MAX_HOLD_HOURS", "6"))
+MAX_HOLD_HOURS   = float(os.environ.get("FLATTEN_MAX_HOLD_HOURS", "0"))
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -120,7 +121,7 @@ def positions_to_flatten(snapshot: dict, now: Optional[datetime] = None) -> list
                 f"end-of-day flatten (UTC hour {now.hour:02d} >= "
                 f"{FLATTEN_HOUR_UTC:02d}) — no overnight holds"
             )
-        else:
+        elif MAX_HOLD_HOURS > 0:
             opened = _parse_ts(
                 _get(pos, "opened_at", "openedAt", "openTime", "createdAt", "timestamp")
             )
@@ -128,7 +129,8 @@ def positions_to_flatten(snapshot: dict, now: Optional[datetime] = None) -> list
                 held_h = (now - opened).total_seconds() / 3600.0
                 if held_h >= MAX_HOLD_HOURS:
                     reason = (
-                        f"max hold exceeded ({held_h:.1f}h >= {MAX_HOLD_HOURS:g}h)"
+                        f"legacy flatten max-hold exceeded "
+                        f"({held_h:.1f}h >= {MAX_HOLD_HOURS:g}h)"
                     )
 
         if reason:

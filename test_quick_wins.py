@@ -1,9 +1,12 @@
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 import data_fetcher
+import intraday_exit
+import manage_positions
 import risk_manager
 import telegram_notify
 
@@ -137,6 +140,88 @@ class TelegramNotifyTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(calls["wait"], (7, 123))
         self.assertIn("BTC", calls["sent"][2])
+
+
+class ManagePositionsTests(unittest.TestCase):
+    def now(self):
+        return datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+
+    def position(self, **overrides):
+        data = {
+            "asset": "BTC",
+            "symbol": "BTC-PERP",
+            "side": "long",
+            "size_coin": 0.1,
+            "entry_price": 100.0,
+            "mark_price": 110.0,
+            "tp": 120.0,
+            "sl": 95.0,
+            "opened_at": (self.now() - timedelta(hours=1)).isoformat(),
+        }
+        data.update(overrides)
+        return data
+
+    def test_close_when_very_close_to_tp(self):
+        actions = manage_positions.actions_for_position(
+            self.position(mark_price=119.0),
+            now=self.now(),
+        )
+
+        self.assertEqual(actions[0]["action"], "close")
+        self.assertAlmostEqual(actions[0]["progress"], 0.95)
+
+    def test_close_stale_trade_with_low_progress(self):
+        actions = manage_positions.actions_for_position(
+            self.position(
+                mark_price=104.0,
+                opened_at=(self.now() - timedelta(hours=3, minutes=30)).isoformat(),
+            ),
+            now=self.now(),
+        )
+
+        self.assertEqual(actions[0]["action"], "close")
+        self.assertIn("Trade fermo", actions[0]["reason"])
+
+    def test_max_hold_does_not_close_when_progress_is_good(self):
+        actions = manage_positions.actions_for_position(
+            self.position(
+                mark_price=112.0,
+                opened_at=(self.now() - timedelta(hours=7)).isoformat(),
+            ),
+            now=self.now(),
+        )
+
+        self.assertTrue(actions)
+        self.assertEqual(actions[0]["action"], "modify_sl")
+
+
+class IntradayExitTests(unittest.TestCase):
+    def test_no_legacy_max_hold_flatten_by_default(self):
+        now = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+        snapshot = {
+            "positions": [{
+                "asset": "BTC",
+                "symbol": "BTC-PERP",
+                "side": "long",
+                "opened_at": (now - timedelta(hours=10)).isoformat(),
+            }]
+        }
+
+        self.assertEqual(intraday_exit.positions_to_flatten(snapshot, now=now), [])
+
+    def test_end_of_day_still_flattens_all_positions(self):
+        now = datetime(2026, 7, 20, 23, 0, tzinfo=timezone.utc)
+        snapshot = {
+            "positions": [{
+                "asset": "BTC",
+                "symbol": "BTC-PERP",
+                "side": "long",
+            }]
+        }
+
+        actions = intraday_exit.positions_to_flatten(snapshot, now=now)
+        self.assertEqual(actions[0]["symbol"], "BTC-PERP")
+        self.assertIn("end-of-day", actions[0]["reason"])
 
 
 if __name__ == "__main__":

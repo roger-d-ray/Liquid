@@ -24,10 +24,11 @@ adds two protections that ratchet as the trade moves in your favour:
                   LOCK_FRACTION of the distance already travelled by moving the
                   stop to entry + LOCK_FRACTION*(mark-entry). Never loosens.
 
-Optionally (opt-in, default OFF) a hard profit-protection CLOSE: bank the whole
+By default, hard profit-protection can close the whole
 position when it is very close to target or the unrealised gain is large — useful
 if the stop-modify tool is not pre-authorised in your policy, since a full close
-uses close_positions_batch (which IS pre-authorised).
+uses close_positions_batch (which IS pre-authorised). It also closes time-stale
+positions only when they have failed to make enough progress toward TP.
 
 WHAT THE AGENT DOES WITH THE OUTPUT
 -----------------------------------
@@ -62,7 +63,11 @@ All thresholds are env-overridable:
     TRAIL_AT_PROGRESS   (default 0.75)  progress→TP at which to start trailing
     LOCK_FRACTION       (default 0.5)   fraction of travelled distance locked when trailing
     BE_BUFFER_PCT       (default 0.001) breakeven placed this far BEYOND entry (fees/funding)
-    PROFIT_PROTECT_CLOSE(default 0)     1 to enable the hard profit-protection close
+    PROFIT_PROTECT_CLOSE(default 1)     1 to enable the hard profit-protection close
+    STALE_AFTER_HOURS   (default 3)     after this many hours, require progress
+    STALE_MIN_PROGRESS  (default 0.25)  minimum progress required after stale time
+    MAX_HOLD_HOURS      (default 6)     late-session max hold guard
+    MAX_HOLD_MIN_PROGRESS(default 0.5)  minimum progress required at max hold
     CLOSE_AT_PROGRESS   (default 0.9)   progress→TP at/above which to close (if enabled)
     CLOSE_MIN_PNL_USD   (default 0)     also close if unrealised_pnl ≥ this (0 = disabled)
 """
@@ -72,6 +77,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from typing import Optional
 
 import portfolio  # reuse the tolerant snapshot loader / schema
@@ -86,13 +92,17 @@ def _envf(name: str, default: float) -> float:
         return default
 
 
-BE_AT_PROGRESS       = _envf("BE_AT_PROGRESS", 0.5)
-TRAIL_AT_PROGRESS    = _envf("TRAIL_AT_PROGRESS", 0.75)
-LOCK_FRACTION        = _envf("LOCK_FRACTION", 0.5)
-BE_BUFFER_PCT        = _envf("BE_BUFFER_PCT", 0.001)
-PROFIT_PROTECT_CLOSE = _envf("PROFIT_PROTECT_CLOSE", 0.0) >= 1.0
-CLOSE_AT_PROGRESS    = _envf("CLOSE_AT_PROGRESS", 0.9)
-CLOSE_MIN_PNL_USD    = _envf("CLOSE_MIN_PNL_USD", 0.0)
+BE_AT_PROGRESS        = _envf("BE_AT_PROGRESS", 0.5)
+TRAIL_AT_PROGRESS     = _envf("TRAIL_AT_PROGRESS", 0.75)
+LOCK_FRACTION         = _envf("LOCK_FRACTION", 0.5)
+BE_BUFFER_PCT         = _envf("BE_BUFFER_PCT", 0.001)
+PROFIT_PROTECT_CLOSE  = _envf("PROFIT_PROTECT_CLOSE", 1.0) >= 1.0
+CLOSE_AT_PROGRESS     = _envf("CLOSE_AT_PROGRESS", 0.9)
+CLOSE_MIN_PNL_USD     = _envf("CLOSE_MIN_PNL_USD", 0.0)
+STALE_AFTER_HOURS     = _envf("STALE_AFTER_HOURS", 3.0)
+STALE_MIN_PROGRESS    = _envf("STALE_MIN_PROGRESS", 0.25)
+MAX_HOLD_HOURS        = _envf("MAX_HOLD_HOURS", 6.0)
+MAX_HOLD_MIN_PROGRESS = _envf("MAX_HOLD_MIN_PROGRESS", 0.5)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -110,6 +120,34 @@ def _fnum(v):
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_ts(v) -> Optional[datetime]:
+    """Best-effort parse of an open-time value into an aware UTC datetime."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        ts = float(v)
+        if ts > 1e12:
+            ts /= 1000.0
+        try:
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    try:
+        dt = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _held_hours(pos: dict, now: Optional[datetime] = None) -> Optional[float]:
+    opened = _parse_ts(_get(pos, "opened_at", "openedAt", "openTime",
+                            "createdAt", "created_at", "timestamp"))
+    if opened is None:
+        return None
+    current = now or datetime.now(timezone.utc)
+    return max(0.0, (current - opened).total_seconds() / 3600.0)
 
 
 def _progress_to_target(side: str, entry: float, mark: float,
@@ -161,7 +199,7 @@ def _valid_stop(side: str, new_sl: float, mark: float) -> bool:
 
 # ─── Decision ─────────────────────────────────────────────────────────────────
 
-def actions_for_position(pos: dict) -> list[dict]:
+def actions_for_position(pos: dict, now: Optional[datetime] = None) -> list[dict]:
     """Return the protective action(s) for a single position (usually 0 or 1)."""
     asset  = _get(pos, "asset", "displayName", default="?")
     symbol = _get(pos, "symbol", "asset", default=asset)
@@ -172,11 +210,39 @@ def actions_for_position(pos: dict) -> list[dict]:
     sl     = _fnum(_get(pos, "sl", "stop_loss", "stop"))
     size   = _fnum(_get(pos, "size_coin", "size"))
     pnl    = _fnum(_get(pos, "unrealized_pnl", "pnl", "uPnl"))
+    held_h = _held_hours(pos, now)
 
     if side not in ("long", "short") or entry is None or mark is None:
         return []
 
     prog = _progress_to_target(side, entry, mark, tp)
+
+    # Close time-stale trades only when they have failed to make enough progress.
+    # Missing TP counts as zero progress because the bot cannot measure the path.
+    stale_progress = prog if prog is not None else 0.0
+    if held_h is not None:
+        if held_h >= MAX_HOLD_HOURS and stale_progress < MAX_HOLD_MIN_PROGRESS:
+            return [{
+                "symbol": symbol, "asset": asset, "side": side, "action": "close",
+                "progress": round(prog, 3) if prog is not None else None,
+                "held_hours": round(held_h, 2),
+                "reason": (
+                    f"Max-hold intelligente: aperta da {held_h:.1f}h ma solo "
+                    f"{stale_progress*100:.0f}% verso il TP (< {MAX_HOLD_MIN_PROGRESS*100:.0f}%). "
+                    "Libero margine invece di aspettare alla cieca."
+                ),
+            }]
+        if held_h >= STALE_AFTER_HOURS and stale_progress < STALE_MIN_PROGRESS:
+            return [{
+                "symbol": symbol, "asset": asset, "side": side, "action": "close",
+                "progress": round(prog, 3) if prog is not None else None,
+                "held_hours": round(held_h, 2),
+                "reason": (
+                    f"Trade fermo: aperta da {held_h:.1f}h e solo "
+                    f"{stale_progress*100:.0f}% verso il TP (< {STALE_MIN_PROGRESS*100:.0f}%). "
+                    "Chiudo per non consumare margine."
+                ),
+            }]
 
     # Not in profit (or can't tell) → nothing to protect yet.
     in_profit = (mark > entry) if side == "long" else (mark < entry)

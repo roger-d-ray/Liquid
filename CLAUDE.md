@@ -10,7 +10,8 @@ Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 
 0. **Reset paper + Flatten intraday (PRIMA di tutto):**
    - **0a. Reset paper (se richiesto):** controlla `paper_reset.pending()`. Se c'è una richiesta, esegui il reset via MCP — vedi sezione "Reset paper trading". Dopo il reset il conto è vuoto: salta il flatten e prosegui con un conto fresco.
-   - **0b. Flatten intraday:** aggiorna lo snapshot e chiudi le posizioni scadute — vedi sezione "Flatten automatico". Va eseguito ad ogni run, prima di cercare nuovi setup, così libera slot/esposizione e garantisce zero overnight.
+   - **0b. Gestione posizioni aperte:** aggiorna lo snapshot e applica `manage_positions.py` — vedi sezione "Gestione intraday intelligente". Protegge profitti, chiude trade fermi e sostituisce il vecchio max-hold cieco.
+   - **0c. Flatten intraday:** esegui `intraday_exit.py` come backstop finale anti-overnight — vedi sezione "Flatten automatico". Va eseguito ad ogni run, prima di cercare nuovi setup, così libera slot/esposizione e garantisce zero overnight.
 1. Esegui data_fetcher.py → genera data/market_data.json
 2. Leggi market_data.json e applica le 3 skill
 3. Per il segnale migliore (confidence più alta), esegui risk_manager.py
@@ -63,18 +64,40 @@ Profilo operativo corrente: **scalping/intraday aggressivo**. Le posizioni nasco
 - **Skill da privilegiare:** **momentum-trading** e **range-trading** (le due intraday). **trend-following** è usata solo come filtro di direzione (EMA50/200 a 1h): non come generatore di segnali intraday, perché il suo orizzonte è settimane/mesi.
 - **Leva:** scalabile per confidence, **massimo 20x** (tetto forzato in risk_manager.py). Alte leve solo con stop stretti.
 - **Rischio per trade:** **3–5% dell'equity** (`risk_pct`). Vedi formula size nello STEP 5.
-- **Uscita = TP/SL stretti intraday + flatten automatico (backstop).** Dimensiona TP e SL sull'**ATR a 15m** così la posizione si risolve in fretta (uscita primaria). In più, `intraday_exit.py` fornisce un **flatten 100% automatico** che garantisce zero overnight (vedi sezione dedicata). ⚠️ Conseguenza a 20x: un gap o un wick oltre lo stop può liquidare/eseguire a prezzo peggiore — lo stop stretto e ancorato a struttura resta la prima protezione. Se un setup non consente uno stop stretto e coerente, **è un no-trade**.
+- **Uscita = TP/SL stretti intraday + gestione progressiva + flatten finale.** Dimensiona TP e SL sull'**ATR a 15m** così la posizione si risolve in fretta (uscita primaria). Poi `manage_positions.py` protegge o chiude in base al progresso verso il TP. Infine `intraday_exit.py` resta il **flatten 100% automatico** che garantisce zero overnight (vedi sezioni dedicate). ⚠️ Conseguenza a 20x: un gap o un wick oltre lo stop può liquidare/eseguire a prezzo peggiore — lo stop stretto e ancorato a struttura resta la prima protezione. Se un setup non consente uno stop stretto e coerente, **è un no-trade**.
 - **R/R minimo** 1.2 (hard) come da risk_manager; sotto 1.8 è comunque un warning.
+
+## Gestione intraday intelligente (prima del flatten)
+
+Meccanismo che evita il vecchio max-hold cieco: prima di chiudere per tempo, guarda se il trade ha camminato verso il TP.
+
+- **Decisione (Python, no credenziali):** `manage_positions.py` legge `data/portfolio_state.json` e stampa un array JSON di azioni:
+  - `modify_sl`: protezione del profitto via modifica SL, preservando il TP esistente.
+  - `close`: chiusura via `close_positions_batch` quando conviene incassare o liberare margine.
+- **Guardrail principali:**
+  1. **Mai peggiorare lo stop:** long = SL solo più alto; short = SL solo più basso.
+  2. **50% verso TP:** sposta SL a breakeven con buffer (`BE_AT_PROGRESS=0.5`, `BE_BUFFER_PCT=0.001`).
+  3. **75% verso TP:** trailing stop, bloccando metà del percorso fatto (`TRAIL_AT_PROGRESS=0.75`, `LOCK_FRACTION=0.5`).
+  4. **90% verso TP:** chiude la posizione se il TP non è stato fillato (`PROFIT_PROTECT_CLOSE=1`, `CLOSE_AT_PROGRESS=0.9`).
+  5. **Trade fermo:** dopo 3h chiude solo se il progresso è sotto 25% (`STALE_AFTER_HOURS=3`, `STALE_MIN_PROGRESS=0.25`).
+  6. **Max-hold intelligente:** dopo 6h chiude solo se il progresso è sotto 50% (`MAX_HOLD_HOURS=6`, `MAX_HOLD_MIN_PROGRESS=0.5`).
+  7. **Leva:** non aumentare mai la leva di una posizione aperta in automatico; al massimo ridurla dietro una regola esplicita futura.
+- **Esecuzione (agente, via MCP):**
+  1. `gp = get_portfolio()` → `portfolio.save_portfolio_state(portfolio.from_coinvest(gp))`.
+  2. `python manage_positions.py` → leggi l'array JSON.
+  3. Per ogni `modify_sl`, chiama il tool MCP di modifica posizione aggiornando solo lo stop loss e preservando take profit, size e lato riportati dall'azione.
+  4. Raggruppa tutte le azioni `close` e chiudi con una sola `close_positions_batch(confirmed=true, symbols=[...])`.
+  5. Se hai modificato o chiuso qualcosa: ri-esegui `get_portfolio()`, salva lo snapshot e notifica Telegram con elenco azioni e motivi.
+  6. Poi esegui comunque il flatten finale (`intraday_exit.py`), perché la garanzia zero overnight resta separata.
 
 ## Flatten automatico (garanzia "chiude in giornata")
 
 Meccanismo che rende l'uscita intraday **100% automatica, senza intervento umano**.
 
 - **Chi lo triggera:** la routine oraria stessa. Il cron che fa girare la routine ogni 60 min *è* il trigger — nessun demone separato, nessun umano. Ad ogni run l'agente esegue lo STEP 0.
-- **Decisione (Python, no credenziali):** `intraday_exit.py` legge lo snapshot `data/portfolio_state.json` e stampa su stdout un array JSON delle posizioni da chiudere. Due regole indipendenti (basta una):
+- **Decisione (Python, no credenziali):** `intraday_exit.py` legge lo snapshot `data/portfolio_state.json` e stampa su stdout un array JSON delle posizioni da chiudere. La regola normale è una sola:
   1. **Flatten di fine giornata (garanzia dura):** oltre `FLATTEN_HOUR_UTC` (default 23) chiude TUTTE le posizioni aperte → mai overnight. Non richiede l'orario di apertura, quindi funziona sempre.
-  2. **Max-hold (best effort):** se lo snapshot ha `opened_at`, chiude la posizione dopo `MAX_HOLD_HOURS` (default 6h). Inattiva in silenzio se l'orario di apertura non è disponibile dall'MCP.
-  Entrambe le soglie sono override via env: `FLATTEN_HOUR_UTC`, `MAX_HOLD_HOURS`.
+  Il vecchio max-hold cieco è disattivato di default; se serve come emergenza legacy usa `FLATTEN_MAX_HOLD_HOURS>0`. Il max-hold normale ora è progress-aware in `manage_positions.py`.
 - **Esecuzione (agente, via MCP):** la chiusura vera è un'azione MCP. ⚠️ L'UNICO tool di chiusura chiamabile dall'agente è **`close_positions_batch`**. Il tool singolare `close_position` è SYSTEM INTERNAL e **non va MAI chiamato** dall'agente. `close_positions_batch` è pre-autorizzato dalla policy intraday (stessa logica di `execute_order`: la policy sostituisce il widget di conferma). Lo STEP 0 è:
   1. `gp = get_portfolio()` → `portfolio.save_portfolio_state(portfolio.from_coinvest(gp))` (aggiorna lo snapshot con lo stato reale).
   2. `python intraday_exit.py` → leggi l'array JSON su stdout: `[{"symbol":"BTC-PERP","asset":"BTC","side":"long","reason":"..."}]`.
