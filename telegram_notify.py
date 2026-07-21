@@ -158,6 +158,18 @@ def _money(v) -> str:
         return "—"
 
 
+def _md(v) -> str:
+    """Escape legacy-Markdown control chars in a dynamic value so it can't open an
+    unbalanced entity. Strategy names like 'momentum_trading' carry a '_' that
+    Telegram would otherwise read as an italic delimiter → HTTP 400 'can't parse
+    entities'. Static labels in the template stay literal; only interpolated
+    values pass through here."""
+    s = str(v)
+    for ch in ("_", "*", "`", "["):
+        s = s.replace(ch, "\\" + ch)
+    return s
+
+
 def _sizing_lines(proposal: dict) -> list[str]:
     """Build the 'how much am I investing' block, if sizing info is available.
 
@@ -220,7 +232,7 @@ def format_proposal(proposal: dict) -> str:
     (size_usd, margin_usd, risk_usd, risk_pct, equity) are shown when present.
     """
     side_emoji = "🟢" if proposal.get("signal") == "long" else "🔴"
-    rr   = proposal.get("risk_reward") or proposal.get("rr")
+    rr   = proposal.get("risk_reward") or proposal.get("rr") or proposal.get("rr_ratio")
     rr_str = f"{rr:.2f}" if rr is not None else "—"
     conf_str = f"{round(proposal.get('confidence', 0) * 100, 1)}%"
     motivation = proposal.get("motivation") or proposal.get("reason") or ""
@@ -228,10 +240,10 @@ def format_proposal(proposal: dict) -> str:
     lines = [
         f"🔔 *Liquid Bot — Nuova Proposta* {side_emoji}",
         "",
-        f"*Strategia:*  {proposal.get('strategy', '?')}",
-        f"*Asset:*      {proposal.get('asset', '?')}",
-        f"*Side:*       {proposal.get('signal', '?').upper()}",
-        f"*Timeframe:*  {proposal.get('timeframe', '?')}",
+        f"*Strategia:*  {_md(proposal.get('strategy', '?'))}",
+        f"*Asset:*      {_md(proposal.get('asset', '?'))}",
+        f"*Side:*       {_md(proposal.get('signal', '?').upper())}",
+        f"*Timeframe:*  {_md(proposal.get('timeframe', '?'))}",
         "",
         f"*Entry (stima):* {proposal.get('entry', '?')}",
         f"*Take Profit:* {proposal.get('target', '?')}",
@@ -245,7 +257,7 @@ def format_proposal(proposal: dict) -> str:
         f"*Risk/Reward:* {rr_str}",
     ]
     if motivation:
-        lines += ["", f"_{motivation}_"]
+        lines += ["", f"_{_md(motivation)}_"]
     lines += [
         "",
         "Rispondi *accetta* / *ok* / *yes* per approvare.",
