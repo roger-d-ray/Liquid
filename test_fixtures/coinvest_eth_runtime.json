@@ -1,0 +1,49 @@
+{
+  "captured_at": "2026-07-22T13:22:38.000Z",
+  "source": "Sanitized read-only Co-Invest MCP responses",
+  "search_markets": {
+    "content": [
+      {
+        "type": "text",
+        "text": "2 markets matching ETH:\n1. ETH | Price $1,919 | 24h -0.9% | Vol $671.4M | Max 25x\n2. ETHFI | Price $0.47889 | 24h +6.03% | Vol $2.2M | Max 5x"
+      }
+    ],
+    "structuredContent": {
+      "text": "2 markets matching ETH:\n1. ETH | Price $1,919 | 24h -0.9% | Vol $671.4M | Max 25x\n2. ETHFI | Price $0.47889 | 24h +6.03% | Vol $2.2M | Max 5x"
+    }
+  },
+  "analyze_market": {
+    "structuredContent": {
+      "symbol": "ETH",
+      "ticker": {
+        "coin": "ETH",
+        "markPx": "1919.9",
+        "funding": "0.0013%",
+        "openInterest": "$2,023,508,128",
+        "dayNtlVlm": "671428804.9410406351",
+        "prevDayPx": "1936.8",
+        "change24h": "-0.87%",
+        "maxLeverage": 25
+      }
+    }
+  },
+  "show_orderbook": {
+    "structuredContent": {
+      "book": {
+        "coin": "ETH",
+        "displayName": "ETH",
+        "bids": [
+          {"px": "1919.5", "sz": "195.134", "n": 42},
+          {"px": "1919.4", "sz": "129.9122", "n": 16},
+          {"px": "1919.3", "sz": "228.1912", "n": 24}
+        ],
+        "asks": [
+          {"px": "1919.6", "sz": "25.1977", "n": 8},
+          {"px": "1919.7", "sz": "77.3053", "n": 6},
+          {"px": "1919.8", "sz": "95.7498", "n": 15}
+        ],
+        "time": 1784726556178
+      }
+    }
+  }
+}

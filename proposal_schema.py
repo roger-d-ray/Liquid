@@ -8,6 +8,7 @@ schema boundary (aliases, enums, clear errors) without adding a runtime package.
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 
 
@@ -100,9 +101,12 @@ def _coerce_number(value, field: str):
     if isinstance(value, bool):
         raise ProposalSchemaError(f"Field {field} must be numeric, got boolean.")
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError) as exc:
         raise ProposalSchemaError(f"Field {field} must be numeric.") from exc
+    if not math.isfinite(number):
+        raise ProposalSchemaError(f"Field {field} must be finite.")
+    return number
 
 
 def _coerce_bool(value):

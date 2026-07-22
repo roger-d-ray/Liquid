@@ -9,6 +9,7 @@ No venue or symbol is inferred from the signal asset.
 from __future__ import annotations
 
 import json
+import math
 import os
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
@@ -21,6 +22,7 @@ RESOLVED = "resolved"
 BLOCKED = "blocked"
 UNSUPPORTED = "unsupported"
 MARKET_TYPES = {"spot", "perpetual", "future"}
+DEFAULT_MINIMUM_COLLATERAL_USD = 15.0
 DEFAULT_AUDIT_PATH = (
     Path(__file__).resolve().parent / "logs" / "execution_resolution.jsonl"
 )
@@ -34,15 +36,47 @@ class ExecutionResolutionError(ValueError):
 class ResolverConfig:
     max_data_age_seconds: float = 30.0
     max_dislocation_bps: float = 25.0
+    minimum_collateral_usd: float = DEFAULT_MINIMUM_COLLATERAL_USD
+
+    def __post_init__(self) -> None:
+        for name in (
+            "max_data_age_seconds",
+            "max_dislocation_bps",
+            "minimum_collateral_usd",
+        ):
+            try:
+                value = float(getattr(self, name))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{name} must be a finite positive number") from exc
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be a finite positive number")
+            if name == "minimum_collateral_usd":
+                value = max(DEFAULT_MINIMUM_COLLATERAL_USD, value)
+            object.__setattr__(self, name, value)
 
     @classmethod
     def from_env(cls) -> "ResolverConfig":
+        configured_minimum = float(
+            os.getenv(
+                "COINVEST_MINIMUM_COLLATERAL_USD",
+                str(DEFAULT_MINIMUM_COLLATERAL_USD),
+            )
+        )
+        if not math.isfinite(configured_minimum) or configured_minimum <= 0:
+            raise ValueError(
+                "COINVEST_MINIMUM_COLLATERAL_USD must be finite and positive"
+            )
         return cls(
             max_data_age_seconds=float(
                 os.getenv("EXECUTION_DATA_MAX_AGE_SECONDS", "30")
             ),
             max_dislocation_bps=float(
                 os.getenv("MAX_EXECUTION_DISLOCATION_BPS", "25")
+            ),
+            # A proposal must never be able to weaken Co-Invest's documented
+            # $15 collateral floor through environment/config injection.
+            minimum_collateral_usd=max(
+                DEFAULT_MINIMUM_COLLATERAL_USD, configured_minimum
             ),
         )
 
@@ -52,16 +86,18 @@ class ExecutionInstrument:
     execution_venue: str
     instrument_id: str
     base_asset: str
-    quote_asset: str
-    market_type: str
+    base_asset_aliases: tuple[str, ...]
+    quote_asset: Optional[str]
+    market_type: Optional[str]
     collateral_currency: Optional[str]
     contract_multiplier: Optional[float]
-    tick_size: float
-    lot_size: float
-    minimum_notional: float
+    tick_size: Optional[float]
+    lot_size: Optional[float]
+    minimum_notional: Optional[float]
+    maximum_leverage: Optional[float]
     mark_price: Optional[float]
     index_price: Optional[float]
-    last_price: float
+    last_price: Optional[float]
     stop_trigger_type: Optional[str]
     margin_mode: Optional[str]
     fee_tier: Any = None
@@ -83,6 +119,7 @@ class MarketContext:
     absolute_dislocation_bps: Optional[float] = None
     max_data_age_seconds: Optional[float] = None
     max_dislocation_bps: Optional[float] = None
+    minimum_collateral_usd: Optional[float] = None
     instrument: Optional[ExecutionInstrument] = None
     catalog_source: Optional[str] = None
     reasons: list[str] = field(default_factory=list)
@@ -100,7 +137,9 @@ _FIELD_ALIASES = {
     "instrument_id": ("instrument_id", "instrumentId", "symbol", "id"),
     "base_asset": ("base_asset", "baseAsset", "base", "underlying"),
     "quote_asset": ("quote_asset", "quoteAsset", "quote"),
-    "market_type": ("market_type", "marketType", "type"),
+    # Generic `type` is intentionally excluded: Co-Invest search payloads may
+    # use it for an asset class such as `crypto`, not for spot/perp/future.
+    "market_type": ("market_type", "marketType"),
     "collateral_currency": (
         "collateral_currency", "collateralCurrency", "collateral", "settleAsset",
     ),
@@ -112,9 +151,12 @@ _FIELD_ALIASES = {
     "minimum_notional": (
         "minimum_notional", "minimumNotional", "minNotional", "minOrderValue",
     ),
+    "maximum_leverage": (
+        "maximum_leverage", "maximumLeverage", "max_leverage", "maxLeverage",
+    ),
     "mark_price": ("mark_price", "markPrice"),
     "index_price": ("index_price", "indexPrice"),
-    "last_price": ("last_price", "lastPrice", "price"),
+    "last_price": ("last_price", "lastPrice"),
     "bid_price": ("bid_price", "bidPrice", "bestBid"),
     "ask_price": ("ask_price", "askPrice", "bestAsk"),
     "stop_trigger_type": (
@@ -163,7 +205,7 @@ def _number(value) -> Optional[float]:
         result = float(value)
     except (TypeError, ValueError):
         return None
-    return result if result > 0 else None
+    return result if math.isfinite(result) and result > 0 else None
 
 
 def _market_type(value) -> Optional[str]:
@@ -183,6 +225,8 @@ def _utc_datetime(value) -> Optional[datetime]:
         dt = value
     elif isinstance(value, (int, float)):
         seconds = float(value)
+        if not math.isfinite(seconds):
+            return None
         if seconds > 10_000_000_000:
             seconds /= 1000.0
         try:
@@ -341,6 +385,10 @@ class ExecutionInstrumentResolver:
             signal_price_type=_text(signal_price_type),
             max_data_age_seconds=self.config.max_data_age_seconds,
             max_dislocation_bps=self.config.max_dislocation_bps,
+            minimum_collateral_usd=max(
+                DEFAULT_MINIMUM_COLLATERAL_USD,
+                self.config.minimum_collateral_usd,
+            ),
             catalog_source=_text(catalog_source),
         )
         if not venue:
@@ -363,6 +411,12 @@ class ExecutionInstrumentResolver:
             return self._record(MarketContext(
                 **base_context, resolution_status=BLOCKED,
                 reasons=["signal venue is unknown"],
+            ))
+        execution_side = str(side).strip().lower()
+        if execution_side not in {"long", "short"}:
+            return self._record(MarketContext(
+                **base_context, resolution_status=UNSUPPORTED,
+                reasons=[f"unsupported execution side '{side}'"],
             ))
 
         try:
@@ -424,20 +478,33 @@ class ExecutionInstrumentResolver:
                 **base_context, resolution_status=BLOCKED,
                 reasons=[f"could not query execution prices: {exc}"],
             ))
+        # Catalogue/search owns identity; the order-book snapshot owns prices.
+        # Never let a pricing payload silently replace the selected instrument.
         combined = dict(selected)
         combined.update(snapshot)
-
-        mt = _market_type(_lookup(combined, "market_type"))
+        mt = _market_type(_lookup(selected, "market_type"))
+        selected_aliases = (
+            selected.get("base_asset_aliases")
+            or selected.get("baseAssetAliases")
+            or ()
+        )
+        if isinstance(selected_aliases, str):
+            selected_aliases = [selected_aliases]
+        selected_aliases = tuple(
+            alias for alias in (_text(value) for value in selected_aliases) if alias
+        )
         values = {
             "instrument_id": selected_id,
-            "base_asset": _text(_lookup(combined, "base_asset")),
-            "quote_asset": _text(_lookup(combined, "quote_asset")),
+            "base_asset": _text(_lookup(selected, "base_asset")),
+            "base_asset_aliases": selected_aliases,
+            "quote_asset": _text(_lookup(selected, "quote_asset")),
             "market_type": mt,
-            "collateral_currency": _text(_lookup(combined, "collateral_currency")),
-            "contract_multiplier": _number(_lookup(combined, "contract_multiplier")),
-            "tick_size": _number(_lookup(combined, "tick_size")),
-            "lot_size": _number(_lookup(combined, "lot_size")),
-            "minimum_notional": _number(_lookup(combined, "minimum_notional")),
+            "collateral_currency": _text(_lookup(selected, "collateral_currency")),
+            "contract_multiplier": _number(_lookup(selected, "contract_multiplier")),
+            "tick_size": _number(_lookup(selected, "tick_size")),
+            "lot_size": _number(_lookup(selected, "lot_size")),
+            "minimum_notional": _number(_lookup(selected, "minimum_notional")),
+            "maximum_leverage": _number(_lookup(combined, "maximum_leverage")),
             "mark_price": _number(_lookup(combined, "mark_price")),
             "index_price": _number(_lookup(combined, "index_price")),
             "last_price": _number(_lookup(combined, "last_price")),
@@ -446,13 +513,6 @@ class ExecutionInstrumentResolver:
             "fee_tier": _lookup(combined, "fee_tier"),
         }
         selected_bases = [values["base_asset"]]
-        selected_aliases = (
-            selected.get("base_asset_aliases")
-            or selected.get("baseAssetAliases")
-            or ()
-        )
-        if isinstance(selected_aliases, str):
-            selected_aliases = [selected_aliases]
         selected_bases.extend(selected_aliases)
         intent_mismatches = []
         if not any(_same(value, base_asset) for value in selected_bases):
@@ -466,34 +526,33 @@ class ExecutionInstrumentResolver:
                 **base_context, resolution_status=BLOCKED,
                 reasons=["resolved instrument conflicts with signal intent: " + ", ".join(intent_mismatches)],
             ))
-        common_required = (
-            "instrument_id", "base_asset", "quote_asset", "market_type",
-            "tick_size", "lot_size", "minimum_notional", "last_price",
-        )
-        derivative_required = (
-            "collateral_currency", "contract_multiplier", "mark_price",
-            "index_price", "stop_trigger_type", "margin_mode",
-        )
-        missing = [name for name in common_required if values.get(name) is None]
-        if mt in {"perpetual", "future"}:
-            missing += [name for name in derivative_required if values.get(name) is None]
+        hard_required = ("instrument_id", "base_asset", "maximum_leverage")
+        missing = [name for name in hard_required if values.get(name) is None]
         if missing:
             return self._record(MarketContext(
                 **base_context, resolution_status=UNSUPPORTED,
                 reasons=[
-                    "Co-Invest does not expose indispensable instrument data: "
+                    "Co-Invest does not expose required execution data: "
                     + ", ".join(missing)
                 ],
             ))
 
         ask = _number(_lookup(combined, "ask_price"))
         bid = _number(_lookup(combined, "bid_price"))
-        if str(side).strip().lower() == "long" and ask is not None:
+        if execution_side == "long" and ask is not None:
             execution_price, price_type = ask, "ask"
-        elif str(side).strip().lower() == "short" and bid is not None:
+        elif execution_side == "short" and bid is not None:
             execution_price, price_type = bid, "bid"
         else:
             execution_price, price_type = values["last_price"], "last"
+        if execution_price is None:
+            return self._record(MarketContext(
+                **base_context, resolution_status=UNSUPPORTED,
+                reasons=[
+                    f"Co-Invest exposes neither a usable {execution_side} book "
+                    "price nor a typed last trade"
+                ],
+            ))
 
         observed_at = _utc_datetime(_lookup(combined, "observed_at"))
         if observed_at is None:
@@ -588,7 +647,13 @@ class ExecutionInstrumentResolver:
         return out
 
 
-def execution_block_reason(proposal: Mapping[str, Any]) -> Optional[str]:
+def execution_block_reason(
+    proposal: Mapping[str, Any], *, now: Optional[datetime] = None
+) -> Optional[str]:
+    try:
+        trusted_config = ResolverConfig.from_env()
+    except (TypeError, ValueError) as exc:
+        return f"local execution policy is invalid: {exc}"
     context = proposal.get("market_context")
     if not isinstance(context, Mapping):
         return "execution MarketContext is missing"
@@ -604,95 +669,211 @@ def execution_block_reason(proposal: Mapping[str, Any]) -> Optional[str]:
         return "resolved MarketContext is missing signal_venue"
     if not _same(instrument.get("execution_venue"), context.get("execution_venue")):
         return "instrument execution_venue conflicts with MarketContext"
-    if _market_type(instrument.get("market_type")) != instrument.get("market_type"):
+    if proposal.get("execution_venue") is not None and not _same(
+        proposal.get("execution_venue"), context.get("execution_venue")
+    ):
+        return "proposal execution_venue conflicts with MarketContext"
+    if proposal.get("instrument_id") is not None and not _same(
+        proposal.get("instrument_id"), instrument.get("instrument_id")
+    ):
+        return "proposal instrument_id conflicts with MarketContext"
+    aliases = instrument.get("base_asset_aliases") or ()
+    if isinstance(aliases, str):
+        aliases = [aliases]
+    declared_bases = [instrument.get("base_asset"), *aliases]
+    for field_name in ("asset", "base_asset"):
+        requested_base = proposal.get(field_name)
+        if requested_base is not None and not any(
+            _same(requested_base, declared_base)
+            for declared_base in declared_bases
+        ):
+            return f"proposal {field_name} conflicts with MarketContext instrument"
+    market_type = instrument.get("market_type")
+    if market_type is not None and _market_type(market_type) != market_type:
         return "resolved MarketContext has invalid market_type"
-    required = (
-        "instrument_id", "base_asset", "quote_asset", "market_type", "tick_size",
-        "lot_size", "minimum_notional", "last_price",
-    )
+    required = ("instrument_id", "base_asset", "maximum_leverage")
     missing = [name for name in required if instrument.get(name) is None]
-    if instrument.get("market_type") in {"perpetual", "future"}:
-        derivative_required = (
-            "collateral_currency", "contract_multiplier", "mark_price",
-            "index_price", "stop_trigger_type", "margin_mode",
-        )
-        missing += [name for name in derivative_required if instrument.get(name) is None]
     if missing:
         return "resolved MarketContext is missing " + ", ".join(missing)
-    for numeric_field in ("tick_size", "lot_size", "minimum_notional", "last_price"):
-        if _number(instrument.get(numeric_field)) is None:
+    optional_numeric_fields = (
+        "tick_size", "lot_size", "minimum_notional", "contract_multiplier",
+        "mark_price", "index_price", "last_price",
+    )
+    for numeric_field in optional_numeric_fields:
+        value = instrument.get(numeric_field)
+        if value is not None and _number(value) is None:
             return f"resolved MarketContext has invalid {numeric_field}"
-    if instrument.get("market_type") in {"perpetual", "future"}:
-        for numeric_field in ("contract_multiplier", "mark_price", "index_price"):
-            if _number(instrument.get(numeric_field)) is None:
-                return f"resolved MarketContext has invalid {numeric_field}"
-    if _number(context.get("signal_price")) is None:
+    maximum_leverage = _number(instrument.get("maximum_leverage"))
+    if maximum_leverage is None:
+        return "resolved MarketContext has invalid maximum_leverage"
+    signal_price = _number(context.get("signal_price"))
+    if signal_price is None:
         return "resolved MarketContext has no signal price"
-    if _number(context.get("execution_price")) is None:
+    execution_price = _number(context.get("execution_price"))
+    if execution_price is None:
         return "resolved MarketContext has no execution price"
-    if context.get("execution_price_type") not in {"ask", "bid", "last"}:
+    proposal_entry = _number(proposal.get("entry"))
+    if proposal_entry is None:
+        return "proposal has no finite positive execution entry"
+    price_tolerance = max(1e-9, execution_price * 1e-9)
+    if abs(proposal_entry - execution_price) > price_tolerance:
+        return "proposal entry conflicts with MarketContext execution price"
+    if proposal.get("execution_price") is not None:
+        top_level_execution_price = _number(proposal.get("execution_price"))
+        if (
+            top_level_execution_price is None
+            or abs(top_level_execution_price - execution_price) > price_tolerance
+        ):
+            return "proposal execution_price conflicts with MarketContext"
+    execution_price_type = context.get("execution_price_type")
+    if execution_price_type not in {"ask", "bid", "last"}:
         return "resolved MarketContext has no typed execution price"
-    if not context.get("execution_price_observed_at"):
+    side = str(proposal.get("signal", proposal.get("side", ""))).strip().lower()
+    if side not in {"long", "short"}:
+        return "proposal execution side is invalid"
+    if side == "long" and execution_price_type == "bid":
+        return "long execution context cannot use bid as its execution price"
+    if side == "short" and execution_price_type == "ask":
+        return "short execution context cannot use ask as its execution price"
+    observed_at = _utc_datetime(context.get("execution_price_observed_at"))
+    if observed_at is None:
         return "resolved MarketContext has no execution-price timestamp"
+    raw_leverage = proposal.get("leverage")
+    if isinstance(raw_leverage, bool):
+        return "proposal leverage is invalid"
     try:
-        leverage = float(proposal.get("leverage") or 1)
+        leverage = 1.0 if raw_leverage is None else float(raw_leverage)
     except (TypeError, ValueError):
         return "proposal leverage is invalid"
-    if instrument.get("market_type") == "spot" and leverage != 1:
+    if not math.isfinite(leverage) or leverage <= 0:
+        return "proposal leverage is invalid"
+    if leverage > maximum_leverage + 1e-12:
+        return "proposal leverage exceeds the resolved instrument maximum"
+    if market_type == "spot" and leverage != 1:
         return "spot execution does not support derivative leverage"
-    age = context.get("execution_data_age_seconds")
     max_age = context.get("max_data_age_seconds")
-    if age is None or max_age is None:
+    if max_age is None:
         return "resolved MarketContext has no execution-data freshness limit"
     try:
-        if float(age) > float(max_age):
+        max_age = float(max_age)
+        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        age = (current - observed_at).total_seconds()
+        if not math.isfinite(max_age) or max_age <= 0:
+            return "resolved MarketContext has invalid execution-data freshness"
+        if max_age > trusted_config.max_data_age_seconds + 1e-12:
+            return "resolved MarketContext weakens the local freshness policy"
+        if age < -1:
+            return "execution-price timestamp is in the future"
+        if age > max_age:
             return "execution data is stale"
     except (TypeError, ValueError):
         return "resolved MarketContext has invalid execution-data freshness"
-    displacement = context.get("absolute_dislocation_bps")
+    computed_dislocation = (execution_price / signal_price - 1.0) * 10_000
+    signed_dislocation = context.get("dislocation_bps")
+    absolute_dislocation = context.get("absolute_dislocation_bps")
     max_displacement = context.get("max_dislocation_bps")
-    if context.get("dislocation_bps") is None:
+    if signed_dislocation is None:
         return "resolved MarketContext has no signed dislocation"
-    if displacement is None or max_displacement is None:
+    if absolute_dislocation is None or max_displacement is None:
         return "resolved MarketContext has no dislocation limit"
     try:
-        if float(displacement) > float(max_displacement):
+        signed_dislocation = float(signed_dislocation)
+        absolute_dislocation = float(absolute_dislocation)
+        max_displacement = float(max_displacement)
+        if not all(math.isfinite(value) for value in (
+            signed_dislocation, absolute_dislocation, max_displacement
+        )) or max_displacement <= 0:
+            return "resolved MarketContext has invalid dislocation data"
+        if max_displacement > trusted_config.max_dislocation_bps + 1e-12:
+            return "resolved MarketContext weakens the local dislocation policy"
+        if abs(signed_dislocation - computed_dislocation) > 0.01:
+            return "resolved MarketContext has inconsistent signed dislocation"
+        if abs(absolute_dislocation - abs(computed_dislocation)) > 0.01:
+            return "resolved MarketContext has inconsistent absolute dislocation"
+        if abs(computed_dislocation) > max_displacement:
             return "execution-price dislocation exceeds its configured limit"
     except (TypeError, ValueError):
         return "resolved MarketContext has invalid dislocation data"
+    minimum_collateral = _number(context.get("minimum_collateral_usd"))
+    if minimum_collateral is None:
+        return "resolved MarketContext has no minimum collateral policy"
+    if minimum_collateral + 1e-12 < trusted_config.minimum_collateral_usd:
+        return "resolved MarketContext weakens the local collateral floor"
+    raw_size = proposal.get("size_usd", proposal.get("size"))
+    if raw_size is not None:
+        size = _number(raw_size)
+        if size is None:
+            return "proposal size_usd is invalid"
+        if size / leverage + 1e-12 < minimum_collateral:
+            return "proposal collateral is below the resolved minimum"
+        minimum_notional = instrument.get("minimum_notional")
+        if minimum_notional is not None and size < float(minimum_notional):
+            return "proposal size_usd is below the resolved minimum_notional"
     return None
 
 
-def assert_executable_proposal(proposal: Mapping[str, Any]) -> None:
-    reason = execution_block_reason(proposal)
+def assert_executable_proposal(
+    proposal: Mapping[str, Any], *, now: Optional[datetime] = None
+) -> None:
+    reason = execution_block_reason(proposal, now=now)
     if reason:
         raise ExecutionResolutionError(reason)
 
 
-def build_execution_order(proposal: Mapping[str, Any]) -> dict:
+def build_execution_order(
+    proposal: Mapping[str, Any], *, now: Optional[datetime] = None
+) -> dict:
     """Build the Co-Invest order arguments from the resolved instrument only."""
-    assert_executable_proposal(proposal)
+    assert_executable_proposal(proposal, now=now)
     context = proposal["market_context"]
     instrument = context["instrument"]
     size = proposal.get("size_usd", proposal.get("size"))
     if _number(size) is None:
         raise ExecutionResolutionError("executable proposal has no positive size_usd")
-    if float(size) < float(instrument["minimum_notional"]):
+    raw_leverage = proposal.get("leverage")
+    if isinstance(raw_leverage, bool):
+        raise ExecutionResolutionError("proposal leverage is invalid")
+    leverage = 1.0 if raw_leverage is None else float(raw_leverage)
+    minimum_collateral = max(
+        DEFAULT_MINIMUM_COLLATERAL_USD,
+        float(context["minimum_collateral_usd"]),
+    )
+    collateral = float(size) / leverage
+    if collateral + 1e-12 < minimum_collateral:
+        raise ExecutionResolutionError(
+            f"order collateral {collateral:g} is below minimum collateral "
+            f"{minimum_collateral:g}"
+        )
+    minimum_notional = instrument.get("minimum_notional")
+    if minimum_notional is not None and float(size) < float(minimum_notional):
         raise ExecutionResolutionError(
             f"size_usd {float(size):g} is below minimum_notional "
-            f"{float(instrument['minimum_notional']):g}"
+            f"{float(minimum_notional):g}"
         )
     signal = str(proposal.get("signal", proposal.get("side", ""))).lower()
     if signal not in {"long", "short"}:
         raise ExecutionResolutionError(f"unsupported execution side '{signal}'")
+    target = _number(proposal.get("target", proposal.get("tp")))
+    stop_loss = _number(proposal.get("stop_loss", proposal.get("sl")))
+    if target is None or stop_loss is None:
+        raise ExecutionResolutionError("order target and stop_loss must be finite and positive")
+    execution_price = float(context["execution_price"])
+    if signal == "long" and not (stop_loss < execution_price < target):
+        raise ExecutionResolutionError(
+            "long order requires stop_loss < execution price < target"
+        )
+    if signal == "short" and not (target < execution_price < stop_loss):
+        raise ExecutionResolutionError(
+            "short order requires target < execution price < stop_loss"
+        )
     return {
         "symbol": instrument["instrument_id"],
         "side": "buy" if signal == "long" else "sell",
         "size": float(size),
-        "leverage": float(proposal.get("leverage") or 1),
+        "leverage": leverage,
         "type": "market",
-        "tp": proposal.get("target", proposal.get("tp")),
-        "sl": proposal.get("stop_loss", proposal.get("sl")),
+        "tp": target,
+        "sl": stop_loss,
         "reasoning": proposal.get("motivation", proposal.get("reason", "")),
     }
 

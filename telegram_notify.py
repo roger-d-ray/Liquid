@@ -216,14 +216,19 @@ def _sizing_lines(proposal: dict) -> list[str]:
             )
         except (KeyError, TypeError, ValueError, ZeroDivisionError):
             pass
-    # Note when the guard raised leverage to fit the margin budget, so the shown
-    # leverage differs from what the strategy proposed — transparency for approval.
+    # Explain every leverage change so the approved tuple is transparent.
     if proposal.get("adjusted") and proposal.get("requested_leverage"):
         try:
             req = float(proposal["requested_leverage"])
-            lev = float(proposal.get("leverage") or req)
-            if lev > req:
-                lines.append(f"⚙️ *Leva adattata:* {req:g}x → {lev:g}x per rientrare nel margine")
+            raw_lev = proposal.get("leverage")
+            lev = req if raw_lev is None else float(raw_lev)
+            if abs(lev - req) > 1e-9:
+                motive = (
+                    "per rientrare nel margine"
+                    if lev > req
+                    else "per rispettare il collaterale minimo"
+                )
+                lines.append(f"⚙️ *Leva adattata:* {req:g}x → {lev:g}x {motive}")
         except (TypeError, ValueError):
             pass
     return lines
@@ -252,7 +257,8 @@ def _execution_lines(proposal: dict) -> list[str]:
         f"*Venue segnale:* {_markdown_text(context.get('signal_venue') or '?')}",
         f"*Venue derivati:* {_markdown_text(context.get('derivatives_venue') or 'n/a')}",
         f"*Venue esecuzione:* {_markdown_text(context.get('execution_venue'))}",
-        f"*Strumento:* {_markdown_text(instrument.get('instrument_id'))} ({_markdown_text(instrument.get('market_type'))})",
+        f"*Strumento:* {_markdown_text(instrument.get('instrument_id'))} "
+        f"({_markdown_text(instrument.get('market_type') or 'gestito da Co-Invest')})",
         (
             f"*Prezzo usato:* {context.get('execution_price_type')} "
             f"{execution_price}"
@@ -452,12 +458,13 @@ _TEST_PROPOSAL = {
         "signal_price_type": "last",
         "execution_price": 67_420.0,
         "execution_price_type": "last",
-        "execution_price_observed_at": "2026-07-22T10:00:00+00:00",
+        "execution_price_observed_at": datetime.now().astimezone().isoformat(),
         "execution_data_age_seconds": 0.0,
         "dislocation_bps": 0.0,
         "absolute_dislocation_bps": 0.0,
         "max_data_age_seconds": 30.0,
         "max_dislocation_bps": 25.0,
+        "minimum_collateral_usd": 15.0,
         "live_trading_allowed": True,
         "instrument": {
             "execution_venue": "runtime-test",
@@ -470,6 +477,7 @@ _TEST_PROPOSAL = {
             "tick_size": 0.1,
             "lot_size": 0.001,
             "minimum_notional": 10.0,
+            "maximum_leverage": 25.0,
             "mark_price": 67_420.0,
             "index_price": 67_420.0,
             "last_price": 67_420.0,

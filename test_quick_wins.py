@@ -25,12 +25,13 @@ def resolved_market_context(price=100.0):
         "signal_price_type": "last",
         "execution_price": price,
         "execution_price_type": "last",
-        "execution_price_observed_at": "2026-07-22T10:00:00+00:00",
+        "execution_price_observed_at": datetime.now(timezone.utc).isoformat(),
         "execution_data_age_seconds": 0.0,
         "dislocation_bps": 0.0,
         "absolute_dislocation_bps": 0.0,
         "max_data_age_seconds": 30.0,
         "max_dislocation_bps": 25.0,
+        "minimum_collateral_usd": 15.0,
         "live_trading_allowed": True,
         "instrument": {
             "execution_venue": "test_venue",
@@ -43,6 +44,7 @@ def resolved_market_context(price=100.0):
             "tick_size": 0.01,
             "lot_size": 0.001,
             "minimum_notional": 10.0,
+            "maximum_leverage": 25.0,
             "mark_price": price,
             "index_price": price,
             "last_price": price,
@@ -206,6 +208,8 @@ class AdaptiveSizingTests(unittest.TestCase):
 
     def test_absolute_075_percent_floor_is_enforced(self):
         result = self.fit(
+            equity=1000.0,
+            available_balance=1000.0,
             risk_pct=0.008,
             max_total_margin_pct=0.07,
             max_per_asset_margin_pct=0.07,
@@ -297,6 +301,7 @@ class TelegramNotifyTests(unittest.TestCase):
                             {
                                 "asset": "BTC",
                                 "signal": "long",
+                                "entry": 100.0,
                                 "confidence": 0.7,
                                 "market_context": resolved_market_context(),
                             },

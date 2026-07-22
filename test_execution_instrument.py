@@ -8,7 +8,6 @@ import telegram_notify
 from execution_instrument import (
     BLOCKED,
     RESOLVED,
-    UNSUPPORTED,
     ExecutionResolutionError,
     ExecutionInstrumentResolver,
     ResolverConfig,
@@ -16,7 +15,7 @@ from execution_instrument import (
 )
 
 
-NOW = datetime(2026, 7, 22, 10, 0, tzinfo=timezone.utc)
+NOW = datetime.now(timezone.utc).replace(microsecond=0)
 
 
 class MockCatalog:
@@ -46,6 +45,7 @@ def instrument(market_type="perpetual", instrument_id="XBT-USD-SWAP", **override
         "tickSize": "0.1",
         "lotSize": "0.001",
         "minNotional": "10",
+        "maxLeverage": 25,
     }
     if market_type != "spot":
         value.update({
@@ -187,14 +187,14 @@ class ExecutionInstrumentResolverTests(unittest.TestCase):
         with self.assertRaises(ExecutionResolutionError):
             telegram_notify.send_proposal(proposal)
 
-    def test_incomplete_derivative_metadata_is_unsupported(self):
+    def test_unused_derivative_metadata_is_optional(self):
         item = instrument()
         del item["contractMultiplier"]
         result = self.resolve(self.resolver([item], {"XBT-USD-SWAP": snapshot()}))
 
-        self.assertEqual(result.resolution_status, UNSUPPORTED)
-        self.assertFalse(result.live_trading_allowed)
-        self.assertIn("contract_multiplier", result.reasons[0])
+        self.assertEqual(result.resolution_status, RESOLVED)
+        self.assertTrue(result.live_trading_allowed)
+        self.assertIsNone(result.instrument.contract_multiplier)
 
     def test_misaligned_price_blocks_resolution(self):
         result = self.resolve(

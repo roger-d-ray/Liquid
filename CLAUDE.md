@@ -55,17 +55,29 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
 2. Leggi market_data.json e applica le 3 skill
    - Mantieni espliciti `live.signal_venue` e `live.derivatives_venue`: una fonte
      dati non identifica mai venue o contratto di esecuzione.
-   - **Prima di creare una proposta azionabile**, interroga il catalogo strumenti
-     e il ticker Co-Invest disponibili a runtime. Passa la risposta a
+   - **Prima di creare una proposta azionabile**, chiama in quest'ordine i tool
+     Co-Invest read-only: `search_markets(query=<asset>)` per la discovery,
+     `analyze_market(symbol=<candidato esatto>)` per confermare `symbol`,
+     `ticker.coin`, `markPx` e `maxLeverage`, poi
+     `show_orderbook(symbol=<stesso symbol>)` per bid/ask e timestamp. Registra
+     immediatamente anche il timestamp locale di ricezione.
+   - Passa i tre payload a `CoinvestRuntimeAdapter` e poi a
      `ExecutionInstrumentResolver`: solo `MarketContext.resolution_status =
      resolved` consente di proseguire; `blocked` e `unsupported` sono no-trade.
+     `search_markets` restituisce attualmente testo umano: non parsarlo come un
+     catalogo. L'identita è provata solo se `analyze_market.symbol`,
+     `ticker.coin` e `show_orderbook.book.coin` coincidono esattamente.
    - Non derivare mai `instrument_id` da `asset` e non parsare il simbolo per
-     inventare base, quote o tipo mercato. Il match usa solo metadati e alias
-     dichiarati dal catalogo runtime.
-   - Registra `execution_venue`, `instrument_id`, `base_asset`, `quote_asset`,
-     `market_type`, `collateral_currency`, `contract_multiplier`, `tick_size`,
-     `lot_size`, `minimum_notional`, `mark_price`, `index_price`, `last_price`,
-     `stop_trigger_type`, `margin_mode` e `fee_tier` quando disponibile.
+     inventare base, quote o tipo mercato.
+   - Il gate bloccante richiede: venue Co-Invest esplicita, `instrument_id` e
+     `base_asset` confermati, `maximum_leverage`, prezzo ask per long / bid per
+     short (oppure un vero last dichiarato), timestamp fresco, dislocazione entro
+     soglia e `minimum_collateral_usd >= 15`.
+   - Registra, ma non rendere bloccanti se Co-Invest non li espone:
+     `quote_asset`, `market_type`, `collateral_currency`, `contract_multiplier`,
+     `tick_size`, `lot_size`, `minimum_notional`, `mark_price`, `index_price`,
+     `last_price`, `stop_trigger_type`, `margin_mode` e `fee_tier`. Se uno di
+     questi campi è presente deve comunque essere valido; non inventarlo.
    - `signal_venue`, `derivatives_venue` ed `execution_venue` sono indipendenti:
      non copiare mai automaticamente il valore di uno nell'altro.
    - Per un market order usa ask per long e bid per short se disponibili;
@@ -74,13 +86,15 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
    - Calcola `dislocation_bps = (execution_price / signal_price - 1) * 10000`.
      Applica `EXECUTION_DATA_MAX_AGE_SECONDS` e
      `MAX_EXECUTION_DISLOCATION_BPS` (default 30 secondi e 25 bps).
-   - Blocca venue ignota, strumento assente/ambiguo, ticker vecchio,
-     dislocazione eccessiva e metadati indispensabili mancanti. Non inventare
-     valori assenti: registra `unsupported` e impedisci il live.
+   - Blocca venue ignota, identita non confermata, lato book mancante, ticker
+     vecchio, dislocazione eccessiva, leva oltre il massimo e collaterale sotto
+     $15. La regola Co-Invest è `size_usd / leverage >= 15`; un eventuale vero
+     `minimum_notional` fornito dal connector si applica separatamente.
    - Registra ogni esito in `logs/execution_resolution.jsonl`. Risk manager,
      sizing e Telegram riapplicano il gate sul `MarketContext`.
-   - Dopo l'approvazione Telegram interroga nuovamente catalogo e ticker e
-     ricrea il contesto: non eseguire con la quotazione pre-approvazione.
+   - Dopo l'approvazione Telegram richiama almeno `analyze_market` e
+     `show_orderbook`, ricrea il contesto e rifai sizing/gate: non eseguire con la
+     quotazione pre-approvazione.
 3. Per il segnale migliore (confidence più alta), esegui risk_manager.py
 4. Se approvato, invia notifica Telegram con telegram_notify.py
 5. Se risposta è "accetta", esegui `python trading_mode.py --require-live` e ri-verifica che Co-Invest non sia in paper; solo se entrambi passano chiama execute_order() di Co-Invest (esecuzione diretta — la conferma Telegram è l'unica autorizzazione richiesta)
@@ -252,8 +266,9 @@ Opzione A (client REST diretto con chiavi in `.env`) resta **non necessaria** fi
 - Prezzo spot / 24h (price, change, volume): Kraken Ticker (primario) → Binance spot (fallback)
 - Funding / OI / long-short ratio: Binance Futures API (gratuita, no auth) — degrada a None se irraggiungibile (es. IP cloud bloccati con HTTP 451), poi arricchito via Co-Invest MCP
 - Dati live aggiuntivi (positioning, news, unusual): Co-Invest MCP
-- Catalogo contratto e ticker di esecuzione: Co-Invest MCP a runtime; nessuna
-  tabella asset-to-simbolo di esecuzione e' ammessa nel repository
+- Identita e prezzo di esecuzione: payload runtime Co-Invest da
+  `search_markets` + `analyze_market` + `show_orderbook`, adattati da
+  `CoinvestRuntimeAdapter`; nessuna tabella asset-to-simbolo e' ammessa
 - Trading: Co-Invest execute_order() dopo approvazione Telegram (la conferma Telegram sostituisce il widget di conferma Claude)
 
 ## Formato JSON proposta (standard tra skill e risk_manager)
@@ -275,8 +290,17 @@ Opzione A (client REST diretto con chiavi in `.env`) resta **non necessaria** fi
   "resolution_status": "resolved",
   "execution_price": float,
   "execution_price_type": "ask|bid|last",
+  "execution_price_observed_at": string ISO-8601,
   "dislocation_bps": float,
-  "instrument": { ...metadati completi del contratto... }
+  "minimum_collateral_usd": 15.0,
+  "instrument": {
+    "instrument_id": string,
+    "base_asset": string,
+    "maximum_leverage": float,
+    "quote_asset": string|null,
+    "market_type": string|null,
+    "...metadati opzionali realmente esposti...": null
+  }
 },
 
 // Sizing — calcolato da sizing.compute_size() PRIMA della notifica (mostrato in proposta):

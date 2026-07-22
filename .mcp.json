@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "coinvest": {
-      "type": "url",
-      "url": "https://coinvest.liquid.trade",
+      "type": "http",
+      "url": "https://coinvest.liquid.trade/mcp",
       "name": "Co-Invest"
     }
   }
