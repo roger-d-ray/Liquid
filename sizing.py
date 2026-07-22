@@ -246,13 +246,22 @@ def plan_trade(proposal: dict, snapshot: dict) -> dict:
     risk_pct/leverage into the proposal before notifying, and skip the trade when
     fits is False.
     """
+    from execution_instrument import assert_executable_proposal
     from risk_manager import RiskManager
+
+    assert_executable_proposal(proposal)
 
     equity    = float(snapshot.get("total_equity") or 0)
     available = snapshot.get("available_balance")
     positions = snapshot.get("positions", []) or []
     asset     = proposal.get("asset")
-    entry     = proposal.get("entry")
+    instrument = proposal["market_context"]["instrument"]
+    proposal_ids = {
+        str(value).strip().casefold()
+        for value in (asset, instrument.get("base_asset"), instrument.get("instrument_id"))
+        if value
+    }
+    entry     = proposal["market_context"]["execution_price"]
     stop      = proposal.get("stop_loss", proposal.get("sl"))
     lev       = proposal.get("leverage") or 1
     risk_pct  = proposal.get("risk_pct")
@@ -260,7 +269,13 @@ def plan_trade(proposal: dict, snapshot: dict) -> dict:
     existing_total = sum(RiskManager._pos_margin(p) for p in positions)
     existing_asset = sum(
         RiskManager._pos_margin(p) for p in positions
-        if (p.get("asset") or p.get("symbol")) == asset
+        if any(
+            str(value).strip().casefold() in proposal_ids
+            for value in (
+                p.get("asset"), p.get("base_asset"), p.get("symbol"),
+                p.get("instrument_id"),
+            ) if value
+        )
     )
 
     return fit_leverage_to_margin(

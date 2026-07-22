@@ -10,7 +10,7 @@ The 60-min cloud routine is the trigger. That hourly cron IS what makes this
 automatic: on EVERY run the agent calls get_portfolio() (Co-Invest MCP), persists
 the snapshot (portfolio.save_portfolio_state), then runs this script. The script
 prints the positions that must close; the agent closes each via the MCP
-close_position()/close_positions_batch(). No daemon, no human — as long as the
+close_positions_batch(). No daemon, no human — as long as the
 routine keeps firing hourly, the flatten happens on its own.
 
 RULES
@@ -30,11 +30,11 @@ without editing code:
     FLATTEN_MAX_HOLD_HOURS (default 0)  optional legacy blind max-hold; 0 disables
 
 Output (CLI): a JSON array on stdout, one object per position to close:
-    [{"symbol": "BTC-PERP", "asset": "BTC", "side": "long", "reason": "..."}]
-`symbol` is the perp id to pass to close_positions_batch(symbols=[...]); `asset`
-is the display name for the Telegram message. An empty array means nothing to
-flatten. Exit code is always 0 on success so the routine can parse stdout
-unconditionally.
+    [{"symbol": "COINVEST_RUNTIME_ID", "asset": "BTC", "side": "long", "reason": "..."}]
+`symbol` is the exact runtime instrument id to pass to close_positions_batch;
+`asset` is only the Telegram display name. Missing ids produce `unsupported`,
+never an asset-derived symbol. An empty array means nothing to flatten.
+Exit code is always 0 on success so the routine can parse stdout unconditionally.
 
 NOTE on how the agent closes: the only close tool the agent may call is the
 Co-Invest MCP close_positions_batch(confirmed=true, symbols=[...]). The singular
@@ -112,7 +112,7 @@ def positions_to_flatten(snapshot: dict, now: Optional[datetime] = None) -> list
     out: list[dict] = []
     for pos in positions:
         asset  = _get(pos, "asset", "displayName", default="?")
-        symbol = _get(pos, "symbol", "asset", default=asset)  # perp id for closing
+        symbol = _get(pos, "instrument_id", "instrumentId", "symbol", default=None)
         side   = str(_get(pos, "side", "signal", default="?")).lower()
         reason: Optional[str] = None
 
@@ -134,7 +134,22 @@ def positions_to_flatten(snapshot: dict, now: Optional[datetime] = None) -> list
                     )
 
         if reason:
-            out.append({"symbol": symbol, "asset": asset, "side": side, "reason": reason})
+            if not symbol:
+                out.append({
+                    "symbol": None,
+                    "asset": asset,
+                    "side": side,
+                    "status": "unsupported",
+                    "reason": (
+                        "Co-Invest position has no execution instrument id; "
+                        "flatten is blocked"
+                    ),
+                })
+            else:
+                out.append({
+                    "symbol": symbol, "asset": asset, "side": side,
+                    "status": "ready", "reason": reason,
+                })
 
     return out
 

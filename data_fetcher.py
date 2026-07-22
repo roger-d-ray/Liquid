@@ -21,7 +21,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from market_bars import NormalizedBars, normalize_ohlcv, only_available_closed_bars
+from market_bars import (
+    NormalizedBars, normalize_ohlcv, only_available_closed_bars, utc_ms,
+)
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -40,7 +42,13 @@ TIMEFRAME_CONFIG = {
 
 REQUIRED_SIGNAL_TIMEFRAMES = ("15m", "1h")
 REQUIRED_INDICATOR_KEYS = ("atr", "adx", "rsi", "ema9", "ema21", "ema50", "vol_ratio")
-CLOSE_GRACE_SECONDS = float(os.getenv("OHLC_CLOSE_GRACE_SECONDS", "2"))
+CLOSE_GRACE_SECONDS = float(os.getenv('OHLC_CLOSE_GRACE_SECONDS', '2'))
+ROLLING_REFERENCE_MAX_DISTANCE_SECONDS = 30 * 60
+ROLLING_REFERENCE_RULE = (
+    'nearest timestamped hourly close to spot price timestamp minus 24h; '
+    'ties prefer the earlier close; maximum distance is 30 minutes'
+)
+MARKET_DATA_SCHEMA_VERSION = 2
 
 # ─── Coinbase OHLCV (public, no auth) — FALLBACK source ──────────────────────
 # Coinbase rejects some datacenter IPs (HTTP 403), so it now sits behind Kraken
@@ -163,30 +171,52 @@ def _resample_plan(granularity_seconds: int):
     )
 
 
-def _aggregate(base_candles: list, target_seconds: int) -> list:
+def _aggregate(
+    base_candles: list, target_seconds: int, base_seconds: int | None = None
+) -> list:
     """Aggregate ascending base candles into buckets of `target_seconds`,
     aligned to the UTC epoch (OHLC = first open, max high, min low, last close,
     summed volume)."""
+    if base_seconds is None:
+        base_seconds, _ = _resample_plan(target_seconds)
+    if target_seconds % base_seconds:
+        raise ValueError('target must be divisible by base interval')
+    factor = target_seconds // base_seconds
     buckets: dict = {}
     for c in base_candles:
-        ts = c["open_time"] // 1000
+        ts = utc_ms(c['open_time']) // 1000
+        if ts % base_seconds:
+            raise ValueError(f'base candle {ts} is not UTC aligned')
         key = ts - (ts % target_seconds)
-        b = buckets.get(key)
-        if b is None:
-            buckets[key] = {
-                "open_time": key * 1000,
-                "open":   c["open"],
-                "high":   c["high"],
-                "low":    c["low"],
-                "close":  c["close"],
-                "volume": c["volume"],
-            }
-        else:
-            b["high"]    = max(b["high"], c["high"])
-            b["low"]     = min(b["low"],  c["low"])
-            b["close"]   = c["close"]
-            b["volume"] += c["volume"]
-    return [buckets[k] for k in sorted(buckets)]
+        buckets.setdefault(key, {})[ts] = c
+    return [
+        _aggregate_bucket(key, buckets[key], base_seconds, factor)
+        for key in sorted(buckets)
+    ]
+
+
+def _aggregate_bucket(key: int, by_time: dict, base_seconds: int, factor: int) -> dict:
+    expected = tuple(key + i * base_seconds for i in range(factor))
+    parts = [by_time[ts] for ts in expected if ts in by_time]
+    missing = [ts for ts in expected if ts not in by_time]
+    if not parts:
+        raise ValueError(f'aggregate bucket {key} has no aligned components')
+    flags = ('missing_component_bars',) if missing else ()
+    method = f'utc_aligned_{factor}x{base_seconds // 3600}h'
+    return {
+        'open_time': key * 1000,
+        'open': parts[0]['open'],
+        'high': max(part['high'] for part in parts),
+        'low': min(part['low'] for part in parts),
+        'close': parts[-1]['close'],
+        'volume': sum(part['volume'] for part in parts),
+        'aggregation_method': method,
+        'completeness': 'incomplete' if missing else 'complete',
+        'quality_flags': flags,
+        'component_count': len(parts),
+        'expected_component_count': factor,
+        'missing_component_open_times': tuple(ts * 1000 for ts in missing),
+    }
 
 
 def _coinbase_raw_native(symbol: str, granularity_seconds: int,
@@ -218,8 +248,9 @@ def _coinbase_raw_native(symbol: str, granularity_seconds: int,
                 "volume": float(row[5]),
             }
         oldest = min(int(row[0]) for row in raw)
-        end = datetime.fromtimestamp(oldest, tz=timezone.utc) \
-            - timedelta(seconds=granularity_seconds)
+        # Reuse the oldest boundary and deduplicate it. Subtracting one full
+        # interval can skip the immediately preceding candle at page seams.
+        end = datetime.fromtimestamp(oldest, tz=timezone.utc)
         time.sleep(0.2)  # respect Coinbase public rate limit (~10 req/s)
 
     # Reverse to chronological order and trim to the requested count.
@@ -240,7 +271,9 @@ def _coinbase_ohlcv_native(symbol: str, granularity_seconds: int,
         received_at=received_at,
         grace_period_seconds=CLOSE_GRACE_SECONDS,
     )
-    return NormalizedBars(batch.closed[-num_candles:], batch.intrabar)
+    return NormalizedBars(
+        batch.closed[-num_candles:], batch.intrabar, batch.incomplete
+    )
 
 
 def _kraken_ohlc(symbol: str, granularity_seconds: int,
@@ -276,7 +309,9 @@ def _kraken_ohlc(symbol: str, granularity_seconds: int,
         received_at=received_at,
         grace_period_seconds=CLOSE_GRACE_SECONDS,
     )
-    return NormalizedBars(batch.closed[-num_candles:], batch.intrabar)
+    return NormalizedBars(
+        batch.closed[-num_candles:], batch.intrabar, batch.incomplete
+    )
 
 
 def _coinbase_ohlcv(symbol: str, granularity_seconds: int,
@@ -297,7 +332,9 @@ def _coinbase_ohlcv(symbol: str, granularity_seconds: int,
             received_at=received_at,
             grace_period_seconds=CLOSE_GRACE_SECONDS,
         )
-        return NormalizedBars(batch.closed[-num_candles:], batch.intrabar)
+        return NormalizedBars(
+            batch.closed[-num_candles:], batch.intrabar, batch.incomplete
+        )
     return _coinbase_ohlcv_native(symbol, granularity_seconds, num_candles)
 
 
@@ -325,11 +362,74 @@ def fetch_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list
     ).closed]
 
 
+def _timestamped_price(point: dict) -> tuple[int, float] | None:
+    timestamp = next((
+        point.get(key) for key in ('price_timestamp', 'timestamp', 'close_time')
+        if point.get(key) is not None
+    ), None)
+    price = point.get('price', point.get('close'))
+    if timestamp is None or price is None:
+        return None
+    return utc_ms(timestamp), float(price)
+
+
+def select_rolling_24h_reference(
+    current_timestamp, price_points: list,
+    max_distance_seconds: int = ROLLING_REFERENCE_MAX_DISTANCE_SECONDS,
+) -> dict | None:
+    current_ms = utc_ms(current_timestamp)
+    target_ms = current_ms - 24 * 60 * 60 * 1000
+    candidates = [item for point in price_points if (item := _timestamped_price(point))]
+    if not candidates:
+        return None
+    timestamp, price = min(
+        candidates, key=lambda item: (
+            abs(item[0] - target_ms), item[0] > target_ms, item[0],
+        )
+    )
+    distance_ms = abs(timestamp - target_ms)
+    if distance_ms > max_distance_seconds * 1000:
+        return None
+    return {
+        'price': price,
+        'timestamp': timestamp,
+        'target_timestamp': target_ms,
+        'distance_from_target_seconds': distance_ms / 1000,
+        'actual_interval_seconds': (current_ms - timestamp) / 1000,
+    }
+
+
+def calculate_rolling_24h_change_pct(
+    current_price: float, current_timestamp, price_points: list,
+    max_distance_seconds: int = ROLLING_REFERENCE_MAX_DISTANCE_SECONDS,
+) -> float | None:
+    reference = select_rolling_24h_reference(
+        current_timestamp, price_points, max_distance_seconds
+    )
+    if not reference or reference['price'] == 0:
+        return None
+    return round((float(current_price) / reference['price'] - 1) * 100, 6)
+
+
+def calculate_change_since_utc_midnight_pct(
+    current_price: float, current_timestamp, daily_bars: list,
+) -> float | None:
+    current_ms = utc_ms(current_timestamp)
+    current_dt = datetime.fromtimestamp(current_ms / 1000, tz=timezone.utc)
+    midnight_ms = utc_ms(current_dt.replace(hour=0, minute=0, second=0, microsecond=0))
+    for bar in daily_bars:
+        opened = bar.get('bar_open_time', bar.get('open_time'))
+        if opened is not None and utc_ms(opened) == midnight_ms:
+            open_price = float(bar['open'])
+            return round((float(current_price) / open_price - 1) * 100, 6)
+    return None
+
+
 def _kraken_spot(asset: str) -> dict:
     """Spot snapshot from Kraken's public Ticker (fallback for fetch_spot).
-    Note: Kraken's 'o' is the *current day* open, so change_24h_pct is an
-    approximation of intraday change; volume is converted to quote (USD) via
-    last price. Good enough for the live snapshot when Binance is blocked."""
+    Kraken's 'o' is the UTC-day open. Its base volume is exact venue data;
+    multiplication by the last price is exposed only as an estimate via
+    estimated_quote_volume."""
     pair = KRAKEN_PAIRS.get(asset, asset)
     data = http_get(f"{KRAKEN_BASE}/Ticker?pair={pair}")
     if data.get("error"):
@@ -337,25 +437,86 @@ def _kraken_spot(asset: str) -> dict:
     tk = next(iter(data["result"].values()))
     last  = float(tk["c"][0])                    # c = [last_price, lot_volume]
     open_ = float(tk["o"][0] if isinstance(tk["o"], list) else tk["o"])
+    base_volume = float(tk['v'][1])
+    observed_at = utc_ms(_venue_now(_kraken_server_time))
     return {
-        "price":          last,
-        "change_24h_pct": round((last - open_) / open_ * 100, 3) if open_ else None,
-        "volume_24h":     float(tk["v"][1]) * last,   # v[1] = 24h base volume
+        'price': last,
+        'price_timestamp': observed_at,
+        'change_since_utc_midnight_pct': (
+            round((last / open_ - 1) * 100, 6) if open_ else None
+        ),
+        'rolling_24h_change_pct': None,
+        'base_volume': base_volume,
+        'quote_volume': None,
+        'estimated_quote_volume': base_volume * last,
         "high_24h":       float(tk["h"][1]),          # h[1] = 24h high
         "low_24h":        float(tk["l"][1]),          # l[1] = 24h low
+        'source': 'kraken',
+        'aggregation_method': 'kraken_ticker',
+        'volume_window': 'rolling_24h',
+        'completeness': 'partial',
+        'quality_flags': [
+            'quote_volume_estimated_from_base_volume_times_last_price'
+        ],
     }
 
 
 def _binance_spot(symbol: str) -> dict:
     """24h spot snapshot from Binance (fallback for fetch_spot)."""
-    t = http_get(f"{BINANCE_SPOT}/ticker/24hr?symbol={symbol}")
+    t = http_get(f'{BINANCE_SPOT}/ticker/24hr?symbol={symbol}')
+    observed_at = utc_ms(t.get('closeTime', _local_now()))
     return {
-        "price":          float(t["lastPrice"]),
-        "change_24h_pct": float(t["priceChangePercent"]),
-        "volume_24h":     float(t["quoteVolume"]),
+        'price': float(t['lastPrice']),
+        'price_timestamp': observed_at,
+        'change_since_utc_midnight_pct': None,
+        'rolling_24h_change_pct': None,
+        'base_volume': float(t['volume']),
+        'quote_volume': float(t['quoteVolume']),
+        'estimated_quote_volume': None,
         "high_24h":       float(t["highPrice"]),
         "low_24h":        float(t["lowPrice"]),
+        'source': 'binance',
+        'aggregation_method': 'binance_24h_ticker',
+        'volume_window': 'rolling_24h',
+        'completeness': 'partial',
+        'quality_flags': ['utc_midnight_change_unavailable_from_ticker'],
     }
+
+
+def enrich_spot_with_history(
+    spot: dict, hourly_bars: list, daily_bars: list = (),
+) -> dict:
+    result = dict(spot)
+    flags = list(result.get('quality_flags', ()))
+    reference = select_rolling_24h_reference(
+        result['price_timestamp'], hourly_bars
+    )
+    result['rolling_24h_reference_rule'] = ROLLING_REFERENCE_RULE
+    if reference:
+        result['rolling_24h_change_pct'] = round(
+            (result['price'] / reference['price'] - 1) * 100, 6
+        )
+        result['rolling_24h_reference_timestamp'] = reference['timestamp']
+        result['rolling_24h_actual_interval_seconds'] = (
+            reference['actual_interval_seconds']
+        )
+        result['rolling_24h_reference_distance_seconds'] = (
+            reference['distance_from_target_seconds']
+        )
+    else:
+        flags.append('rolling_24h_reference_missing_or_outside_tolerance')
+    if result.get('change_since_utc_midnight_pct') is None:
+        result['change_since_utc_midnight_pct'] = (
+            calculate_change_since_utc_midnight_pct(
+                result['price'], result['price_timestamp'], list(daily_bars)
+            )
+        )
+    if result['change_since_utc_midnight_pct'] is None:
+        flags.append('utc_midnight_reference_missing')
+    else:
+        flags = [f for f in flags if f != 'utc_midnight_change_unavailable_from_ticker']
+    result['quality_flags'] = list(dict.fromkeys(flags))
+    return result
 
 
 def fetch_spot(symbol: str) -> dict:
@@ -369,7 +530,13 @@ def fetch_spot(symbol: str) -> dict:
 
 
 def fetch_futures(symbol: str) -> dict:
-    result = {"funding_rate": None, "oi": None, "long_pct": None, "short_pct": None}
+    result = {
+        "funding_rate": None,
+        "oi": None,
+        "long_pct": None,
+        "short_pct": None,
+        "derivatives_venue": "binance_futures",
+    }
     try:
         p = http_get(f"{BINANCE_FUT}/premiumIndex?symbol={symbol}")
         result["funding_rate"] = float(p["lastFundingRate"])
@@ -571,7 +738,18 @@ def period_extreme(candles: list, n: int, *, as_of=None) -> dict:
 
 # ─── Compute all indicators for one timeframe ─────────────────────────────────
 
-def compute_indicators(candles: list, *, as_of=None) -> dict:
+def _are_utc_daily_bars(candles: list) -> bool:
+    day_ms = 24 * 60 * 60 * 1000
+    return all(
+        utc_ms(c['open_time']) % day_ms == 0
+        and utc_ms(c['close_time']) - utc_ms(c['open_time']) == day_ms
+        for c in candles
+    )
+
+
+def compute_indicators(
+    candles: list, *, as_of=None, timeframe: str | None = None
+) -> dict:
     as_of = as_of or _local_now()
     candles = only_available_closed_bars(candles, as_of=as_of)
     if not candles:
@@ -611,11 +789,19 @@ def compute_indicators(candles: list, *, as_of=None) -> dict:
         "resistance":  swings["resistance"],
         "support":     swings["support"],
         # Breakout levels
-        "high_20": period_extreme(candles, 20, as_of=as_of)["high"],
-        "low_20":  period_extreme(candles, 20, as_of=as_of)["low"],
-        "high_55": period_extreme(candles, 55, as_of=as_of)["high"] if len(candles) >= 55 else None,
-        "low_55":  period_extreme(candles, 55, as_of=as_of)["low"]  if len(candles) >= 55 else None,
+        'high_20_bars': period_extreme(candles, 20, as_of=as_of)['high'],
+        'low_20_bars': period_extreme(candles, 20, as_of=as_of)['low'],
+        'high_55_bars': period_extreme(candles, 55, as_of=as_of)['high']
+        if len(candles) >= 55 else None,
+        'low_55_bars': period_extreme(candles, 55, as_of=as_of)['low']
+        if len(candles) >= 55 else None,
     }
+    if timeframe == '1d':
+        if not _are_utc_daily_bars(candles):
+            raise ValueError('daily levels require UTC-aligned 1d bars')
+        daily = period_extreme(candles, 20, as_of=as_of)
+        ind['high_20_days'] = daily['high']
+        ind['low_20_days'] = daily['low']
     return ind
 
 
@@ -644,6 +830,9 @@ def validate_signal_ready_output(output: dict) -> None:
             if not candles:
                 errors.append(f"{asset} {tf}: candles mancanti")
                 continue
+            if any(c.get('completeness', 'complete') != 'complete' for c in candles):
+                errors.append(f'{asset} {tf}: presenti barre incomplete')
+                continue
             if any(c.get("is_final") is not True or c.get("available_at") is None
                    for c in candles):
                 errors.append(f"{asset} {tf}: presenti dati non ClosedBar")
@@ -668,6 +857,20 @@ def validate_signal_ready_output(output: dict) -> None:
 
 def main():
     output = {
+        'schema_version': MARKET_DATA_SCHEMA_VERSION,
+        'field_migrations': {
+            'high_20': 'high_20_bars',
+            'low_20': 'low_20_bars',
+            'high_55': 'high_55_bars',
+            'low_55': 'low_55_bars',
+            'change_24h_pct': [
+                'change_since_utc_midnight_pct',
+                'rolling_24h_change_pct',
+            ],
+            'volume_24h': [
+                'base_volume', 'quote_volume', 'estimated_quote_volume',
+            ],
+        },
         "timestamp": _local_now().isoformat(),
         "assets": {},
     }
@@ -677,6 +880,7 @@ def main():
         asset_data = {
             "timeframes": {},
             "intrabar": {},
+            "incomplete": {},
             "indicators": {},
             "live": {},
             "news": [],
@@ -690,18 +894,31 @@ def main():
                 candles = [bar.to_dict() for bar in batch.closed]
                 asset_data["timeframes"][tf] = candles
                 asset_data["intrabar"][tf] = [bar.to_dict() for bar in batch.intrabar]
-                asset_data["indicators"][tf] = compute_indicators(candles)
+                asset_data['incomplete'][tf] = [
+                    bar.to_dict() for bar in batch.incomplete
+                ]
+                asset_data['indicators'][tf] = compute_indicators(
+                    candles, timeframe=tf
+                )
                 print("ok")
             except Exception as e:
                 print(f"ERROR: {e}")
                 asset_data["timeframes"][tf] = []
                 asset_data["intrabar"][tf] = []
+                asset_data['incomplete'][tf] = []
                 asset_data["indicators"][tf] = {}
             time.sleep(0.1)  # respect Coinbase rate limit
 
         print("  live + futures...", end=" ", flush=True)
         try:
-            live = {**fetch_spot(symbol), **fetch_futures(symbol)}
+            spot = enrich_spot_with_history(
+                fetch_spot(symbol),
+                asset_data['timeframes'].get('1h', []),
+                asset_data['intrabar'].get('1d', []),
+            )
+            futures = fetch_futures(symbol)
+            live = {**spot, **futures}
+            live["signal_venue"] = spot.get("source")
             asset_data["live"] = live
             print("ok")
         except Exception as e:

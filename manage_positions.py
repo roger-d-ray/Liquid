@@ -33,19 +33,16 @@ positions only when they have failed to make enough progress toward TP.
 WHAT THE AGENT DOES WITH THE OUTPUT
 -----------------------------------
 stdout is a JSON array, one object per recommended action:
-  [{"symbol":"BTC-PERP","asset":"BTC","side":"long","action":"modify_sl",
+  [{"symbol":"COINVEST_RUNTIME_ID","asset":"BTC","side":"long","action":"modify_sl",
     "new_sl":68010.0,"current_sl":66800.0,"progress":0.61,"reason":"..."},
-   {"symbol":"ETH-PERP","asset":"ETH","side":"short","action":"close",
+   {"symbol":"ANOTHER_RUNTIME_ID","asset":"ETH","side":"short","action":"close",
     "reason":"..."}]
 
-  • action "modify_sl" → agent calls modify_position(action="modify_tpsl",
-      asset=<asset>, positionSide=<side>, positionSize=<coins>, stopLoss=new_sl,
-      takeProfit=<unchanged>, ...).  ⚠️ modify_position renders a confirmation
-      widget; make sure it is pre-authorised by the intraday policy (like
-      close_positions_batch / execute_order) before wiring this to auto-run,
-      otherwise it will block in the cloud.
-  • action "close"     → agent calls close_positions_batch(confirmed=true,
+  * action "modify_sl": call the Co-Invest modification tool with the exact
+      runtime instrument id in `symbol`; never substitute the display `asset`.
+  * action "close": call close_positions_batch(confirmed=true,
       symbols=[<symbol>]).  Already pre-authorised.
+  * action "unsupported": do not mutate the account; notify and stop.
 
 Empty array ⇒ nothing to do. Exit code is always 0 on success.
 
@@ -202,7 +199,7 @@ def _valid_stop(side: str, new_sl: float, mark: float) -> bool:
 def actions_for_position(pos: dict, now: Optional[datetime] = None) -> list[dict]:
     """Return the protective action(s) for a single position (usually 0 or 1)."""
     asset  = _get(pos, "asset", "displayName", default="?")
-    symbol = _get(pos, "symbol", "asset", default=asset)
+    symbol = _get(pos, "instrument_id", "instrumentId", "symbol", default=None)
     side   = str(_get(pos, "side", "signal", default="")).lower()
     entry  = _fnum(_get(pos, "entry_price", "entry", "avg_entry"))
     mark   = _fnum(_get(pos, "mark_price", "mark", "current_price"))
@@ -214,6 +211,18 @@ def actions_for_position(pos: dict, now: Optional[datetime] = None) -> list[dict
 
     if side not in ("long", "short") or entry is None or mark is None:
         return []
+    if not symbol:
+        return [{
+            "symbol": None,
+            "asset": asset,
+            "side": side,
+            "action": "unsupported",
+            "status": "unsupported",
+            "reason": (
+                "Co-Invest position has no execution instrument id; "
+                "position mutation is blocked"
+            ),
+        }]
 
     prog = _progress_to_target(side, entry, mark, tp)
 

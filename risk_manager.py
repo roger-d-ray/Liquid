@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from execution_instrument import execution_block_reason
 from proposal_schema import ProposalSchemaError, normalize_proposal
 
 
@@ -44,6 +45,7 @@ class Proposal:
 
     # Execution sizing
     leverage:   Optional[float] = None   # capped at MAX_LEVERAGE
+    market_context: Optional[dict] = None
 
     # Universal context
     adx:            Optional[float] = None
@@ -518,8 +520,25 @@ class RiskManager:
             f.write(json.dumps(entry) + "\n")
 
     @staticmethod
-    def _pos_asset(pos: dict):
-        return pos.get("asset") or pos.get("symbol")
+    def _position_matches_proposal(pos: dict, proposal: Proposal) -> bool:
+        """Match only explicit portfolio/catalog identifiers, never symbol rules."""
+        position_ids = {
+            pos.get("asset"), pos.get("base_asset"), pos.get("symbol"),
+            pos.get("instrument_id"),
+        }
+        proposal_ids = {proposal.asset}
+        context = proposal.market_context or {}
+        instrument = context.get("instrument") or {}
+        proposal_ids.update({
+            instrument.get("base_asset"), instrument.get("instrument_id")
+        })
+        normalised_positions = {
+            str(value).strip().casefold() for value in position_ids if value
+        }
+        return any(
+            str(value).strip().casefold() in normalised_positions
+            for value in proposal_ids if value
+        )
 
     @staticmethod
     def _pos_side(pos: dict):
@@ -562,7 +581,7 @@ class RiskManager:
 
         for pos in positions:
             pos_side = self._pos_side(pos)
-            if self._pos_asset(pos) == p.asset and pos_side != p.signal:
+            if self._position_matches_proposal(pos, p) and pos_side != p.signal:
                 r.rejection_reason = (
                     f"Conflicting positions: cannot open {p.signal} on {p.asset} "
                     f"while a {pos_side} position is already open."
@@ -573,7 +592,7 @@ class RiskManager:
         if equity:
             asset_margin = sum(
                 self._pos_margin(pos) for pos in positions
-                if self._pos_asset(pos) == p.asset
+                if self._position_matches_proposal(pos, p)
             )
             total_margin = sum(self._pos_margin(pos) for pos in positions)
             if asset_margin / equity >= MAX_PER_ASSET_MARGIN_PCT:
@@ -624,6 +643,12 @@ class RiskManager:
             self._log(r)
             return r
 
+        execution_error = execution_block_reason(normalised if isinstance(proposal, dict) else raw)
+        if execution_error:
+            r.rejection_reason = f"Execution blocked: {execution_error}."
+            self._log(r)
+            return r
+
         if not _validate_universal(p, r):
             self._log(r)
             return r
@@ -652,6 +677,12 @@ class RiskManager:
             "target":      r.final_target,
             "stop_loss":   r.final_stop,
             "risk_reward": r.risk_reward,
+            "execution_venue": p.market_context["execution_venue"],
+            "instrument_id": p.market_context["instrument"]["instrument_id"],
+            "market_type": p.market_context["instrument"]["market_type"],
+            "execution_price": p.market_context["execution_price"],
+            "execution_price_type": p.market_context["execution_price_type"],
+            "market_context": p.market_context,
         }
         self._log(r)
         return r

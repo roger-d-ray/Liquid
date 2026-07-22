@@ -42,7 +42,45 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
    - `timeframes[tf]` contiene esclusivamente `ClosedBar`; `intrabar[tf]` contiene
      snapshot parziali separati. Indicatori, swing e segnali bar-close devono
      usare solo barre con `is_final=true` e `available_at <= timestamp` della run.
+   - incomplete[tf] conserva le barre con gap a scopo diagnostico: non usarle
+     mai per indicatori o segnali.
+   - Gli estremi sono high_20_bars/low_20_bars e
+     high_55_bars/low_55_bars. I livelli high_20_days/low_20_days compaiono
+     solo negli indicatori 1d e derivano esclusivamente da barre daily.
+   - Non usare change_24h_pct o volume_24h: lo schema v2 separa
+     change_since_utc_midnight_pct da rolling_24h_change_pct e base_volume,
+     quote_volume ed estimated_quote_volume. Una stima non vale come quote
+     volume esatto; controlla sempre source, aggregation_method, completeness
+     e quality_flags.
 2. Leggi market_data.json e applica le 3 skill
+   - Mantieni espliciti `live.signal_venue` e `live.derivatives_venue`: una fonte
+     dati non identifica mai venue o contratto di esecuzione.
+   - **Prima di creare una proposta azionabile**, interroga il catalogo strumenti
+     e il ticker Co-Invest disponibili a runtime. Passa la risposta a
+     `ExecutionInstrumentResolver`: solo `MarketContext.resolution_status =
+     resolved` consente di proseguire; `blocked` e `unsupported` sono no-trade.
+   - Non derivare mai `instrument_id` da `asset` e non parsare il simbolo per
+     inventare base, quote o tipo mercato. Il match usa solo metadati e alias
+     dichiarati dal catalogo runtime.
+   - Registra `execution_venue`, `instrument_id`, `base_asset`, `quote_asset`,
+     `market_type`, `collateral_currency`, `contract_multiplier`, `tick_size`,
+     `lot_size`, `minimum_notional`, `mark_price`, `index_price`, `last_price`,
+     `stop_trigger_type`, `margin_mode` e `fee_tier` quando disponibile.
+   - `signal_venue`, `derivatives_venue` ed `execution_venue` sono indipendenti:
+     non copiare mai automaticamente il valore di uno nell'altro.
+   - Per un market order usa ask per long e bid per short se disponibili;
+     altrimenti usa `last_price` dichiarando il tipo. Mark e index non sono
+     prezzi eseguibili.
+   - Calcola `dislocation_bps = (execution_price / signal_price - 1) * 10000`.
+     Applica `EXECUTION_DATA_MAX_AGE_SECONDS` e
+     `MAX_EXECUTION_DISLOCATION_BPS` (default 30 secondi e 25 bps).
+   - Blocca venue ignota, strumento assente/ambiguo, ticker vecchio,
+     dislocazione eccessiva e metadati indispensabili mancanti. Non inventare
+     valori assenti: registra `unsupported` e impedisci il live.
+   - Registra ogni esito in `logs/execution_resolution.jsonl`. Risk manager,
+     sizing e Telegram riapplicano il gate sul `MarketContext`.
+   - Dopo l'approvazione Telegram interroga nuovamente catalogo e ticker e
+     ricrea il contesto: non eseguire con la quotazione pre-approvazione.
 3. Per il segnale migliore (confidence più alta), esegui risk_manager.py
 4. Se approvato, invia notifica Telegram con telegram_notify.py
 5. Se risposta è "accetta", esegui `python trading_mode.py --require-live` e ri-verifica che Co-Invest non sia in paper; solo se entrambi passano chiama execute_order() di Co-Invest (esecuzione diretta — la conferma Telegram è l'unica autorizzazione richiesta)
@@ -58,7 +96,10 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
 Dopo approvazione Telegram (exit code 0 da telegram_notify.py):
 
 1. Esegui `python trading_mode.py --require-live` e ri-verifica che Co-Invest non sia in paper, poi chiama `execute_order()` via Co-Invest MCP con i parametri validati dal risk_manager:
-   - symbol: asset (es. "BTC")
+   - symbol: `market_context.instrument.instrument_id` esatto; mai `asset` e mai un simbolo sintetizzato
+   - prima della chiamata ricrea il contesto con ticker corrente e usa
+     `build_execution_order(proposal)`; se il nuovo stato non è `resolved`,
+     annulla l'esecuzione anche se la proposta era stata approvata
    - side: "buy" (long) o "sell" (short)
    - size: notionale in USD. Dimensiona sul RISCHIO, non sulla leva: `rischio_$ = risk_pct × equity` (risk_pct = 3–5%, vedi Modalità intraday), poi `size_coin = rischio_$ / |entry − stop_loss|`, `size = size_coin × entry`. La leva NON entra nel calcolo del rischio: determina solo il margine impegnato (`margine = size / leverage`) e la distanza di liquidazione.
    - leverage: scalabile per confidence, **max 20x** (validato in risk_manager.py → MAX_LEVERAGE). Usa leve alte SOLO con stop stretti su ATR 15m. Default suggerito: 10x setup normali, fino a 20x sui setup a confidence più alta.
@@ -118,6 +159,9 @@ Meccanismo che evita il vecchio max-hold cieco: prima di chiudere per tempo, gua
   3. Per ogni `modify_sl`, esegui `python trading_mode.py --require-live`, poi chiama il tool MCP di modifica posizione aggiornando solo lo stop loss e preservando take profit, size e lato riportati dall'azione.
   4. Raggruppa tutte le azioni `close`; prima di chiudere esegui `python trading_mode.py --require-live`, poi chiudi con una sola `close_positions_batch(confirmed=true, symbols=[...])`.
   5. Se hai modificato o chiuso qualcosa: ri-esegui `get_portfolio()`, salva lo snapshot e notifica Telegram con elenco azioni e motivi.
+     Se compare un'azione con `status="unsupported"`, non eseguire alcuna
+     mutazione del conto: notifica che Co-Invest non ha fornito l'identificativo
+     esatto e ferma la gestione live della run.
   6. Poi esegui comunque il flatten finale (`intraday_exit.py`), perché la garanzia zero overnight resta separata.
 
 ## Flatten automatico (garanzia "chiude in giornata")
@@ -130,10 +174,11 @@ Meccanismo che rende l'uscita intraday **100% automatica, senza intervento umano
   Il vecchio max-hold cieco è disattivato di default; se serve come emergenza legacy usa `FLATTEN_MAX_HOLD_HOURS>0`. Il max-hold normale ora è progress-aware in `manage_positions.py`.
 - **Esecuzione (agente, via MCP):** la chiusura vera è un'azione MCP. ⚠️ L'UNICO tool di chiusura chiamabile dall'agente è **`close_positions_batch`**. Il tool singolare `close_position` è SYSTEM INTERNAL e **non va MAI chiamato** dall'agente. `close_positions_batch` è pre-autorizzato dalla policy intraday (stessa logica di `execute_order`: la policy sostituisce il widget di conferma). Lo STEP 0 è:
   1. `gp = get_portfolio()` → `portfolio.save_portfolio_state(portfolio.from_coinvest(gp))` (aggiorna lo snapshot con lo stato reale).
-  2. `python intraday_exit.py` → leggi l'array JSON su stdout: `[{"symbol":"BTC-PERP","asset":"BTC","side":"long","reason":"..."}]`.
+  2. `python intraday_exit.py` → usa il `symbol` esatto restituito per la posizione aperta; non ricostruirlo dall'asset.
   3. Se l'array NON è vuoto, esegui `python trading_mode.py --require-live`, poi chiudi via Co-Invest MCP con **una sola** chiamata:
-     `close_positions_batch(confirmed=true, symbols=[<lista dei "symbol" perp dell'array>])`.
-     (I `symbol` sono in formato perp, es. "BTC-PERP" — passa quelli, non l'`asset`. Con `symbols` omesso chiuderebbe TUTTE le posizioni: passa sempre la lista esplicita.)
+     Se una voce ha `status="unsupported"`, non chiamare il tool di chiusura:
+     notifica l'assenza dell'identificativo e ferma la gestione live della run.
+     `close_positions_batch(confirmed=true, symbols=[<lista esatta dei "symbol" dell'array>])`. Non assumere tipo o formato del contratto. Con `symbols` omesso chiuderebbe TUTTE le posizioni: passa sempre la lista esplicita.
   4. Se hai chiuso qualcosa: ri-esegui `get_portfolio()`, ri-salva lo snapshot, e notifica su Telegram (`python telegram_notify.py --message "..."`) con l'elenco di cosa è stato flattato e il motivo.
   5. Se l'array è vuoto: nessuna chiusura, prosegui.
 - Lo STEP 0 non apre mai posizioni: chiude soltanto. È indipendente dalla proposta di trading (STEP 1-6).
@@ -207,6 +252,8 @@ Opzione A (client REST diretto con chiavi in `.env`) resta **non necessaria** fi
 - Prezzo spot / 24h (price, change, volume): Kraken Ticker (primario) → Binance spot (fallback)
 - Funding / OI / long-short ratio: Binance Futures API (gratuita, no auth) — degrada a None se irraggiungibile (es. IP cloud bloccati con HTTP 451), poi arricchito via Co-Invest MCP
 - Dati live aggiuntivi (positioning, news, unusual): Co-Invest MCP
+- Catalogo contratto e ticker di esecuzione: Co-Invest MCP a runtime; nessuna
+  tabella asset-to-simbolo di esecuzione e' ammessa nel repository
 - Trading: Co-Invest execute_order() dopo approvazione Telegram (la conferma Telegram sostituisce il widget di conferma Claude)
 
 ## Formato JSON proposta (standard tra skill e risk_manager)
@@ -220,6 +267,17 @@ Opzione A (client REST diretto con chiavi in `.env`) resta **non necessaria** fi
 "leverage": float,
 "risk_pct": float, "rr_ratio": float,
 "confidence": float (0.0-1.0),
+"signal_price": float,
+"market_context": {
+  "signal_venue": string,
+  "derivatives_venue": string|null,
+  "execution_venue": string,
+  "resolution_status": "resolved",
+  "execution_price": float,
+  "execution_price_type": "ask|bid|last",
+  "dislocation_bps": float,
+  "instrument": { ...metadati completi del contratto... }
+},
 
 // Sizing — calcolato da sizing.compute_size() PRIMA della notifica (mostrato in proposta):
 "equity": float,        // equity del conto (da get_portfolio)

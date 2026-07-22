@@ -21,6 +21,8 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
+from execution_instrument import assert_executable_proposal
+
 try:
     import telegram_lock as _lock
 except Exception:  # coordination is optional; never block trading if it's absent
@@ -227,6 +229,41 @@ def _sizing_lines(proposal: dict) -> list[str]:
     return lines
 
 
+def _markdown_text(value) -> str:
+    return str(value).replace("\\", "\\\\").replace("_", "\\_").replace("*", "\\*")
+
+
+def _execution_lines(proposal: dict) -> list[str]:
+    context = proposal.get("market_context") or {}
+    instrument = context.get("instrument") or {}
+    if not context:
+        return ["", "*Esecuzione:* NON RISOLTA"]
+    if context.get("resolution_status") != "resolved":
+        reasons = "; ".join(str(v) for v in context.get("reasons") or ())
+        return ["", f"*Esecuzione:* {context.get('resolution_status', 'unknown')} - {reasons}"]
+    displacement = context.get("dislocation_bps")
+    displacement_text = (
+        f"{float(displacement):+.2f} bps" if displacement is not None else "?"
+    )
+    execution_price = context.get("execution_price")
+    signal_price = context.get("signal_price")
+    return [
+        "",
+        f"*Venue segnale:* {_markdown_text(context.get('signal_venue') or '?')}",
+        f"*Venue derivati:* {_markdown_text(context.get('derivatives_venue') or 'n/a')}",
+        f"*Venue esecuzione:* {_markdown_text(context.get('execution_venue'))}",
+        f"*Strumento:* {_markdown_text(instrument.get('instrument_id'))} ({_markdown_text(instrument.get('market_type'))})",
+        (
+            f"*Prezzo usato:* {context.get('execution_price_type')} "
+            f"{execution_price}"
+        ),
+        (
+            f"*Prezzo segnale:* {context.get('signal_price_type')} {signal_price} "
+            f"- dislocazione {displacement_text}"
+        ),
+    ]
+
+
 def format_proposal(proposal: dict) -> str:
     """Build the full trade-proposal message (Markdown). Single source of truth so
     the sent message and the --test preview never diverge.
@@ -255,6 +292,7 @@ def format_proposal(proposal: dict) -> str:
         f"*Stop Loss:*  {proposal.get('stop_loss', '?')}",
         f"*Leverage:*   {proposal.get('leverage', 1)}x",
     ]
+    lines += _execution_lines(proposal)
     lines += _sizing_lines(proposal)
     lines += [
         "",
@@ -273,6 +311,7 @@ def format_proposal(proposal: dict) -> str:
 
 def send_proposal(proposal: dict) -> None:
     """Send a formatted trade proposal message."""
+    assert_executable_proposal(proposal)
     token, chat_id = _creds()
     _do_send(token, chat_id, format_proposal(proposal))
 
@@ -373,6 +412,7 @@ def wait_response(timeout_minutes: int = 30, start_offset: int = None) -> bool:
 
 def notify_and_wait(proposal: dict, timeout_minutes: int = 30) -> bool:
     """Convenience: send_proposal + wait_response in one call."""
+    assert_executable_proposal(proposal)
     token, chat_id = _creds()
     start_offset = None
     try:
@@ -403,6 +443,40 @@ _TEST_PROPOSAL = {
     "margin_usd":  4_349.68,    # size_usd / 10x
     "risk_usd":    400.0,
     "motivation":  "Breakout sopra 20-day high con volume 1.4x — RSI 63, MACD positivo.",
+    "market_context": {
+        "signal_venue": "kraken",
+        "derivatives_venue": "binance_futures",
+        "execution_venue": "runtime-test",
+        "resolution_status": "resolved",
+        "signal_price": 67_420.0,
+        "signal_price_type": "last",
+        "execution_price": 67_420.0,
+        "execution_price_type": "last",
+        "execution_price_observed_at": "2026-07-22T10:00:00+00:00",
+        "execution_data_age_seconds": 0.0,
+        "dislocation_bps": 0.0,
+        "absolute_dislocation_bps": 0.0,
+        "max_data_age_seconds": 30.0,
+        "max_dislocation_bps": 25.0,
+        "live_trading_allowed": True,
+        "instrument": {
+            "execution_venue": "runtime-test",
+            "instrument_id": "CATALOG_RUNTIME_ID",
+            "base_asset": "BTC",
+            "quote_asset": "USD",
+            "market_type": "perpetual",
+            "collateral_currency": "USD",
+            "contract_multiplier": 1.0,
+            "tick_size": 0.1,
+            "lot_size": 0.001,
+            "minimum_notional": 10.0,
+            "mark_price": 67_420.0,
+            "index_price": 67_420.0,
+            "last_price": 67_420.0,
+            "stop_trigger_type": "mark",
+            "margin_mode": "cross",
+        },
+    },
 }
 
 if __name__ == "__main__":

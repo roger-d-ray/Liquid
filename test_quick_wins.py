@@ -15,6 +15,43 @@ import telegram_notify
 import trading_mode
 
 
+def resolved_market_context(price=100.0):
+    return {
+        "signal_venue": "kraken",
+        "derivatives_venue": "binance_futures",
+        "execution_venue": "test_venue",
+        "resolution_status": "resolved",
+        "signal_price": price,
+        "signal_price_type": "last",
+        "execution_price": price,
+        "execution_price_type": "last",
+        "execution_price_observed_at": "2026-07-22T10:00:00+00:00",
+        "execution_data_age_seconds": 0.0,
+        "dislocation_bps": 0.0,
+        "absolute_dislocation_bps": 0.0,
+        "max_data_age_seconds": 30.0,
+        "max_dislocation_bps": 25.0,
+        "live_trading_allowed": True,
+        "instrument": {
+            "execution_venue": "test_venue",
+            "instrument_id": "DYNAMIC-TEST-ID",
+            "base_asset": "BTC",
+            "quote_asset": "USD",
+            "market_type": "perpetual",
+            "collateral_currency": "USD",
+            "contract_multiplier": 1.0,
+            "tick_size": 0.01,
+            "lot_size": 0.001,
+            "minimum_notional": 10.0,
+            "mark_price": price,
+            "index_price": price,
+            "last_price": price,
+            "stop_trigger_type": "mark",
+            "margin_mode": "cross",
+        },
+    }
+
+
 class RiskManagerSchemaTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="liquid-tests-"))
@@ -41,6 +78,7 @@ class RiskManagerSchemaTests(unittest.TestCase):
             "volume_ratio": 1.5,
             "new_20d_high": True,
             "leverage": 10,
+            "market_context": resolved_market_context(),
         }
 
     def test_old_claude_schema_aliases_are_normalised(self):
@@ -60,6 +98,7 @@ class RiskManagerSchemaTests(unittest.TestCase):
             "vol_ratio": 1.5,
             "new_20d_high": "true",
             "leverage": 10,
+            "market_context": resolved_market_context(),
         }
 
         result = self.validate(proposal)
@@ -255,7 +294,12 @@ class TelegramNotifyTests(unittest.TestCase):
                 with patch.object(telegram_notify, "_do_send", side_effect=fake_send):
                     with patch.object(telegram_notify, "wait_response", side_effect=fake_wait):
                         ok = telegram_notify.notify_and_wait(
-                            {"asset": "BTC", "signal": "long", "confidence": 0.7},
+                            {
+                                "asset": "BTC",
+                                "signal": "long",
+                                "confidence": 0.7,
+                                "market_context": resolved_market_context(),
+                            },
                             timeout_minutes=7,
                         )
 
@@ -316,6 +360,15 @@ class ManagePositionsTests(unittest.TestCase):
         self.assertTrue(actions)
         self.assertEqual(actions[0]["action"], "modify_sl")
 
+    def test_missing_runtime_instrument_never_falls_back_to_asset(self):
+        actions = manage_positions.actions_for_position(
+            self.position(symbol=None),
+            now=self.now(),
+        )
+
+        self.assertEqual(actions[0]["status"], "unsupported")
+        self.assertIsNone(actions[0]["symbol"])
+
 
 class IntradayExitTests(unittest.TestCase):
     def test_no_legacy_max_hold_flatten_by_default(self):
@@ -344,6 +397,21 @@ class IntradayExitTests(unittest.TestCase):
         actions = intraday_exit.positions_to_flatten(snapshot, now=now)
         self.assertEqual(actions[0]["symbol"], "BTC-PERP")
         self.assertIn("end-of-day", actions[0]["reason"])
+
+    def test_end_of_day_missing_instrument_is_unsupported_not_asset(self):
+        now = datetime(2026, 7, 20, 23, 0, tzinfo=timezone.utc)
+        snapshot = {
+            "positions": [{
+                "asset": "BTC",
+                "side": "long",
+            }]
+        }
+
+        actions = intraday_exit.positions_to_flatten(snapshot, now=now)
+
+        self.assertEqual(actions[0]["status"], "unsupported")
+        self.assertIsNone(actions[0]["symbol"])
+        self.assertNotEqual(actions[0]["symbol"], actions[0]["asset"])
 
 
 class TradingModeTests(unittest.TestCase):

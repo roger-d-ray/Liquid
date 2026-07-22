@@ -55,6 +55,8 @@ NUMERIC_FIELDS = (
     "stop_loss",
     "confidence",
     "price",
+    "signal_price",
+    "execution_price",
     "leverage",
     "adx",
     "rsi",

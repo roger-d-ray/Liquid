@@ -169,7 +169,8 @@ def from_coinvest(gp: dict) -> dict:
 
     The MCP uses different field names/units than our snapshot:
       account.equity/available_balance/margin_used  → top-level
-      position.symbol="BTC-PERP" / displayName="BTC" → asset (prefer displayName)
+      position.instrumentId/symbol → exact runtime instrument identifier;
+      displayName/baseAsset → display-only asset
       position.size is in COIN units → we also compute size_usd = |size| * markPx
       entryPx → entry_price, markPx → mark_price, unrealizedPnl → unrealized_pnl
     """
@@ -185,12 +186,15 @@ def from_coinvest(gp: dict) -> dict:
         size = _fnum(p.get("size"))
         mark = _fnum(p.get("markPx"))
         notional = abs(size * mark) if (size is not None and mark is not None) else None
+        instrument_id = _first(p, "instrument_id", "instrumentId", "symbol")
         out["positions"].append({
-            "asset":          p.get("displayName") or p.get("symbol"),
-            # Raw perp symbol (e.g. "BTC-PERP") — required by
-            # close_positions_batch(symbols=[...]); close needs the perp id, not
-            # the display name.
-            "symbol":         p.get("symbol"),
+            "asset":          _first(
+                p, "displayName", "base_asset", "baseAsset",
+                default=instrument_id,
+            ),
+            # Exact Co-Invest runtime id; never derive it from the display asset.
+            "symbol":         instrument_id,
+            "instrument_id":  instrument_id,
             "side":           p.get("side"),
             "size_coin":      size,
             "size_usd":       notional,

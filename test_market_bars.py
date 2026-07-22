@@ -3,7 +3,9 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import data_fetcher
-from market_bars import ClosedBar, normalize_ohlcv, utc_ms
+from market_bars import (
+    ClosedBar, normalize_ohlcv, only_available_closed_bars, utc_ms,
+)
 
 
 UTC = timezone.utc
@@ -17,6 +19,17 @@ def row(open_time, close=101.0, volume=10.0):
         "low": min(99.0, close),
         "close": close,
         "volume": volume,
+    }
+
+
+def hourly_row(opened, open_, high, low, close, volume):
+    return {
+        'open_time': utc_ms(opened),
+        'open': open_,
+        'high': high,
+        'low': low,
+        'close': close,
+        'volume': volume,
     }
 
 
@@ -157,6 +170,141 @@ class ClosedBarConsumerTests(unittest.TestCase):
 
         self.assertEqual(batch.closed, ())
         self.assertEqual(batch.intrabar[0].source, "kraken")
+
+
+class MarketFieldSemanticsTests(unittest.TestCase):
+    def test_rolling_24h_uses_nearest_timestamped_price(self):
+        current = datetime(2026, 7, 22, 12, 15, tzinfo=UTC)
+        target = current - timedelta(hours=24)
+        points = [
+            {'timestamp': utc_ms(target - timedelta(minutes=20)), 'price': 100},
+            {'timestamp': utc_ms(target + timedelta(minutes=10)), 'price': 110},
+        ]
+        change = data_fetcher.calculate_rolling_24h_change_pct(
+            121, current, points
+        )
+        self.assertEqual(change, 10.0)
+        reference = data_fetcher.select_rolling_24h_reference(current, points)
+        self.assertEqual(
+            reference['actual_interval_seconds'], 23 * 3600 + 50 * 60
+        )
+
+    def test_rolling_24h_rejects_reference_outside_tolerance(self):
+        current = datetime(2026, 7, 22, 12, tzinfo=UTC)
+        point = current - timedelta(hours=25)
+        self.assertIsNone(data_fetcher.calculate_rolling_24h_change_pct(
+            110, current, [{'timestamp': utc_ms(point), 'price': 100}]
+        ))
+
+    def test_coinbase_4h_numeric_aggregation(self):
+        start = datetime(2026, 7, 22, 0, tzinfo=UTC)
+        rows = [
+            hourly_row(start, 100, 105, 99, 102, 1),
+            hourly_row(start + timedelta(hours=1), 102, 110, 98, 108, 2),
+            hourly_row(start + timedelta(hours=2), 108, 109, 97, 103, 3),
+            hourly_row(start + timedelta(hours=3), 103, 106, 96, 104, 4),
+        ]
+        bar = data_fetcher._aggregate(rows, 4 * 3600)[0]
+        self.assertEqual(
+            (bar['open'], bar['high'], bar['low'], bar['close'], bar['volume']),
+            (100, 110, 96, 104, 10),
+        )
+        self.assertEqual(bar['open_time'], utc_ms(start))
+        self.assertEqual(bar['aggregation_method'], 'utc_aligned_4x1h')
+        self.assertEqual(bar['completeness'], 'complete')
+        self.assertEqual(bar['quality_flags'], ())
+
+    def test_coinbase_4h_gap_is_incomplete_and_signal_ineligible(self):
+        start = datetime(2026, 7, 22, 0, tzinfo=UTC)
+        rows = [
+            hourly_row(start, 100, 105, 99, 102, 1),
+            hourly_row(start + timedelta(hours=1), 102, 110, 98, 108, 2),
+            hourly_row(start + timedelta(hours=3), 103, 106, 96, 104, 4),
+        ]
+        aggregate = data_fetcher._aggregate(rows, 4 * 3600)[0]
+        self.assertEqual(aggregate['completeness'], 'incomplete')
+        self.assertIn('missing_component_bars', aggregate['quality_flags'])
+        now = start + timedelta(hours=5)
+        batch = normalize_ohlcv(
+            [aggregate], 4 * 3600, 'coinbase',
+            observed_at=now, received_at=now, grace_period_seconds=2,
+        )
+        self.assertEqual(batch.closed, ())
+        self.assertEqual(len(batch.incomplete), 1)
+        self.assertFalse(batch.incomplete[0].is_final)
+        self.assertEqual(batch.incomplete[0].component_count, 3)
+        self.assertEqual(
+            batch.incomplete[0].missing_component_open_times,
+            (utc_ms(start + timedelta(hours=2)),),
+        )
+        self.assertEqual(
+            only_available_closed_bars(batch.incomplete, as_of=now), []
+        )
+
+    def test_change_since_midnight_switches_at_utc_day_boundary(self):
+        day_one = datetime(2026, 7, 21, tzinfo=UTC)
+        day_two = day_one + timedelta(days=1)
+        daily = [
+            {'open_time': utc_ms(day_one), 'open': 100},
+            {'open_time': utc_ms(day_two), 'open': 200},
+        ]
+        before = day_two - timedelta(minutes=1)
+        after = day_two + timedelta(minutes=1)
+        self.assertEqual(
+            data_fetcher.calculate_change_since_utc_midnight_pct(
+                110, before, daily
+            ),
+            10.0,
+        )
+        self.assertEqual(
+            data_fetcher.calculate_change_since_utc_midnight_pct(
+                220, after, daily
+            ),
+            10.0,
+        )
+
+    def test_bar_extremes_are_renamed_and_day_levels_are_daily_only(self):
+        start = datetime(2026, 5, 1, tzinfo=UTC)
+        candles = []
+        for i in range(60):
+            opened = start + timedelta(days=i)
+            candles.append(ClosedBar(
+                open_time=utc_ms(opened),
+                close_time=utc_ms(opened + timedelta(days=1)),
+                open=100, high=200 + i, low=50 - i, close=100, volume=10,
+                source='test', received_at=utc_ms(opened + timedelta(days=1)),
+                available_at=utc_ms(opened + timedelta(days=1)),
+            ).to_dict())
+        as_of = start + timedelta(days=61)
+        hourly = data_fetcher.compute_indicators(
+            candles, as_of=as_of, timeframe='1h'
+        )
+        daily_indicators = data_fetcher.compute_indicators(
+            candles, as_of=as_of, timeframe='1d'
+        )
+        self.assertEqual(hourly['high_20_bars'], 259)
+        self.assertEqual(hourly['low_20_bars'], -9)
+        self.assertEqual(hourly['high_55_bars'], 259)
+        self.assertNotIn('high_20_days', hourly)
+        self.assertEqual(daily_indicators['high_20_days'], 259)
+        self.assertEqual(daily_indicators['low_20_days'], -9)
+        self.assertNotIn('high_20', hourly)
+
+    def test_kraken_volume_estimate_is_not_reported_as_exact_quote_volume(self):
+        ticker = {'error': [], 'result': {'pair': {
+            'c': ['110'], 'o': '100', 'v': ['1', '2'],
+            'h': ['112', '115'], 'l': ['98', '95'],
+        }}}
+        observed = datetime(2026, 7, 22, 12, tzinfo=UTC)
+        with patch.object(data_fetcher, 'http_get', return_value=ticker), patch.object(
+            data_fetcher, '_venue_now', return_value=observed
+        ):
+            spot = data_fetcher._kraken_spot('BTC')
+        self.assertEqual(spot['change_since_utc_midnight_pct'], 10)
+        self.assertIsNone(spot['rolling_24h_change_pct'])
+        self.assertEqual(spot['base_volume'], 2)
+        self.assertIsNone(spot['quote_volume'])
+        self.assertEqual(spot['estimated_quote_volume'], 220)
 
 
 if __name__ == "__main__":

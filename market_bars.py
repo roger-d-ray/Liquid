@@ -32,10 +32,22 @@ class ClosedBar:
     source: str
     received_at: int
     available_at: int
+    aggregation_method: str = 'native'
+    completeness: str = 'complete'
+    quality_flags: tuple[str, ...] = ()
+    component_count: int = 1
+    expected_component_count: int = 1
+    missing_component_open_times: tuple[int, ...] = ()
     is_final: bool = field(default=True, init=False)
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class IncompleteBar(ClosedBar):
+    completeness: str = field(default='incomplete', init=False)
+    is_final: bool = field(default=False, init=False)
 
 
 @dataclass(frozen=True)
@@ -48,6 +60,12 @@ class IntrabarSnapshot:
     close: float
     volume: float
     source: str
+    aggregation_method: str = 'native'
+    completeness: str = 'complete'
+    quality_flags: tuple[str, ...] = ()
+    component_count: int = 1
+    expected_component_count: int = 1
+    missing_component_open_times: tuple[int, ...] = ()
     is_final: bool = field(default=False, init=False)
 
     def to_dict(self) -> dict:
@@ -58,6 +76,7 @@ class IntrabarSnapshot:
 class NormalizedBars:
     closed: tuple[ClosedBar, ...]
     intrabar: tuple[IntrabarSnapshot, ...]
+    incomplete: tuple[IncompleteBar, ...] = ()
 
 
 def _prices(row: dict) -> tuple[float, float, float, float, float]:
@@ -96,6 +115,7 @@ def normalize_ohlcv(
     grace_ms = int(grace_period_seconds * 1000)
     closed_by_time = {bar.open_time: bar for bar in existing_closed}
     snapshots_by_time: dict[int, IntrabarSnapshot] = {}
+    incomplete_by_time: dict[int, IncompleteBar] = {}
     previous_open: int | None = None
 
     for row in rows:
@@ -109,16 +129,33 @@ def normalize_ohlcv(
         open_, high, low, close, volume = _prices(row)
         close_time = open_time + duration_ms
         final_after = close_time + grace_ms
+        method = str(row.get('aggregation_method', 'native'))
+        completeness = str(row.get('completeness', 'complete'))
+        if completeness not in {'complete', 'incomplete'}:
+            raise ValueError(f'invalid completeness at {open_time}')
+        flags = tuple(str(flag) for flag in row.get('quality_flags', ()))
+        component_count = int(row.get('component_count', 1))
+        expected_count = int(row.get('expected_component_count', 1))
+        missing_times = tuple(
+            utc_ms(ts) for ts in row.get('missing_component_open_times', ())
+        )
 
         if now_ms >= final_after:
-            if open_time not in closed_by_time:
-                closed_by_time[open_time] = ClosedBar(
+            bar_type = IncompleteBar if completeness == 'incomplete' else ClosedBar
+            target = incomplete_by_time if completeness == 'incomplete' else closed_by_time
+            if open_time not in target:
+                target[open_time] = bar_type(
                     open_time=open_time,
                     close_time=close_time,
                     open=open_, high=high, low=low, close=close, volume=volume,
                     source=source,
                     received_at=received_ms,
                     available_at=max(final_after, received_ms),
+                    aggregation_method=method,
+                    quality_flags=flags,
+                    component_count=component_count,
+                    expected_component_count=expected_count,
+                    missing_component_open_times=missing_times,
                 )
             # A final value always wins over a snapshot of the same bar, while
             # an existing final value itself remains immutable.
@@ -129,11 +166,18 @@ def normalize_ohlcv(
                 bar_open_time=open_time,
                 open=open_, high=high, low=low, close=close, volume=volume,
                 source=source,
+                aggregation_method=method,
+                completeness=completeness,
+                quality_flags=flags,
+                component_count=component_count,
+                expected_component_count=expected_count,
+                missing_component_open_times=missing_times,
             )
 
     return NormalizedBars(
         closed=tuple(closed_by_time[key] for key in sorted(closed_by_time)),
         intrabar=tuple(snapshots_by_time[key] for key in sorted(snapshots_by_time)),
+        incomplete=tuple(incomplete_by_time[key] for key in sorted(incomplete_by_time)),
     )
 
 
@@ -151,6 +195,8 @@ def only_available_closed_bars(
     result = []
     for candle in candles:
         item = candle.to_dict() if isinstance(candle, ClosedBar) else dict(candle)
+        if item.get('completeness', 'complete') != 'complete':
+            continue
         if item.get("is_final") is not True:
             continue
         available_at = item.get("available_at")
