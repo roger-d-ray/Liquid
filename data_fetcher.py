@@ -13,12 +13,15 @@ Output: data/market_data.json
 
 import json
 import math
+import os
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from market_bars import NormalizedBars, normalize_ohlcv, only_available_closed_bars
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -37,6 +40,7 @@ TIMEFRAME_CONFIG = {
 
 REQUIRED_SIGNAL_TIMEFRAMES = ("15m", "1h")
 REQUIRED_INDICATOR_KEYS = ("atr", "adx", "rsi", "ema9", "ema21", "ema50", "vol_ratio")
+CLOSE_GRACE_SECONDS = float(os.getenv("OHLC_CLOSE_GRACE_SECONDS", "2"))
 
 # ─── Coinbase OHLCV (public, no auth) — FALLBACK source ──────────────────────
 # Coinbase rejects some datacenter IPs (HTTP 403), so it now sits behind Kraken
@@ -82,6 +86,30 @@ def http_get(url: str, retries: int = 3):
             if attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
+
+
+def _local_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _kraken_server_time() -> datetime:
+    data = http_get(f"{KRAKEN_BASE}/Time")
+    if data.get("error"):
+        raise RuntimeError(f"Kraken Time: {data['error']}")
+    return datetime.fromtimestamp(int(data["result"]["unixtime"]), tz=timezone.utc)
+
+
+def _coinbase_server_time() -> datetime:
+    data = http_get(f"{COINBASE_BASE}/time")
+    return datetime.fromtimestamp(float(data["epoch"]), tz=timezone.utc)
+
+
+def _venue_now(provider) -> datetime:
+    """Prefer venue time; local UTC remains a safe availability fallback."""
+    try:
+        return provider()
+    except Exception:
+        return _local_now()
 
 
 # ─── Coinbase OHLCV fetcher ───────────────────────────────────────────────────
@@ -161,13 +189,13 @@ def _aggregate(base_candles: list, target_seconds: int) -> list:
     return [buckets[k] for k in sorted(buckets)]
 
 
-def _coinbase_ohlcv_native(symbol: str, granularity_seconds: int,
-                           num_candles: int) -> list:
+def _coinbase_raw_native(symbol: str, granularity_seconds: int,
+                         num_candles: int) -> tuple[list, datetime, datetime]:
     """Native-granularity Coinbase fetch with pagination. Returns a chronological
     (oldest→newest) list of {open_time(ms), open, high, low, close, volume}."""
     product_id = COINBASE_PRODUCTS.get(symbol, symbol)
     collected: dict = {}                      # ts(seconds) -> candle dict (dedup)
-    end = datetime.now(timezone.utc)
+    end = _venue_now(_coinbase_server_time)
     window = timedelta(seconds=granularity_seconds * COINBASE_MAX_CANDLES)
     max_pages = math.ceil(num_candles / COINBASE_MAX_CANDLES) + 2  # safety cap
 
@@ -195,11 +223,28 @@ def _coinbase_ohlcv_native(symbol: str, granularity_seconds: int,
         time.sleep(0.2)  # respect Coinbase public rate limit (~10 req/s)
 
     # Reverse to chronological order and trim to the requested count.
+    received_at = _local_now()
+    observed_at = _venue_now(_coinbase_server_time)
     candles = [collected[k] for k in sorted(collected)]
-    return candles[-num_candles:]
+    return candles[-num_candles:], observed_at, received_at
 
 
-def _kraken_ohlc(symbol: str, granularity_seconds: int, num_candles: int) -> list:
+def _coinbase_ohlcv_native(symbol: str, granularity_seconds: int,
+                           num_candles: int) -> NormalizedBars:
+    rows, observed_at, received_at = _coinbase_raw_native(
+        symbol, granularity_seconds, num_candles + 1
+    )
+    batch = normalize_ohlcv(
+        rows, granularity_seconds, "coinbase",
+        observed_at=observed_at,
+        received_at=received_at,
+        grace_period_seconds=CLOSE_GRACE_SECONDS,
+    )
+    return NormalizedBars(batch.closed[-num_candles:], batch.intrabar)
+
+
+def _kraken_ohlc(symbol: str, granularity_seconds: int,
+                 num_candles: int) -> NormalizedBars:
     """Native-granularity Kraken fetch (fallback). Kraken returns candles
     ascending already, as [time, open, high, low, close, vwap, volume, count]
     with time in seconds. Same output schema as the Coinbase fetcher."""
@@ -211,11 +256,13 @@ def _kraken_ohlc(symbol: str, granularity_seconds: int, num_candles: int) -> lis
         )
     pair = KRAKEN_PAIRS.get(symbol, symbol)
     data = http_get(f"{KRAKEN_BASE}/OHLC?pair={pair}&interval={interval}")
+    received_at = _local_now()
+    observed_at = _venue_now(_kraken_server_time)
     if data.get("error"):
         raise RuntimeError(f"Kraken OHLC {pair}: {data['error']}")
     result = data["result"]
     key = next(k for k in result if k != "last")    # result key name varies
-    candles = [{
+    rows = [{
         "open_time": int(r[0]) * 1000,
         "open":   float(r[1]),
         "high":   float(r[2]),
@@ -223,21 +270,39 @@ def _kraken_ohlc(symbol: str, granularity_seconds: int, num_candles: int) -> lis
         "close":  float(r[4]),
         "volume": float(r[6]),
     } for r in result[key]]
-    return candles[-num_candles:]
+    batch = normalize_ohlcv(
+        rows, granularity_seconds, "kraken",
+        observed_at=observed_at,
+        received_at=received_at,
+        grace_period_seconds=CLOSE_GRACE_SECONDS,
+    )
+    return NormalizedBars(batch.closed[-num_candles:], batch.intrabar)
 
 
-def _coinbase_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list:
+def _coinbase_ohlcv(symbol: str, granularity_seconds: int,
+                    num_candles: int) -> NormalizedBars:
     """Coinbase OHLCV (fallback source). Coinbase has no native 4h granularity,
     so 4h (14400s) is aggregated from native 1h candles; native granularities are
     fetched directly with pagination."""
     if granularity_seconds not in COINBASE_GRANULARITIES:
         base, factor = _resample_plan(granularity_seconds)
-        base_candles = _coinbase_ohlcv(symbol, base, num_candles * factor)
-        return _aggregate(base_candles, granularity_seconds)[-num_candles:]
+        rows, observed_at, received_at = _coinbase_raw_native(
+            symbol, base, num_candles * factor + factor
+        )
+        batch = normalize_ohlcv(
+            _aggregate(rows, granularity_seconds),
+            granularity_seconds,
+            "coinbase",
+            observed_at=observed_at,
+            received_at=received_at,
+            grace_period_seconds=CLOSE_GRACE_SECONDS,
+        )
+        return NormalizedBars(batch.closed[-num_candles:], batch.intrabar)
     return _coinbase_ohlcv_native(symbol, granularity_seconds, num_candles)
 
 
-def fetch_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list:
+def fetch_ohlcv_batch(symbol: str, granularity_seconds: int,
+                      num_candles: int) -> NormalizedBars:
     """Fetch `num_candles` OHLCV candles for `symbol` (BTC/ETH/SOL).
 
     Primary source is Kraken — its public API does not geo-block datacenter/cloud
@@ -251,6 +316,13 @@ def fetch_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list
     except Exception as e:
         print(f"[fallback Coinbase: Kraken ko -> {e}]", end=" ", flush=True)
         return _coinbase_ohlcv(symbol, granularity_seconds, num_candles)
+
+
+def fetch_ohlcv(symbol: str, granularity_seconds: int, num_candles: int) -> list:
+    """Compatibility API returning only serialised ClosedBar values."""
+    return [bar.to_dict() for bar in fetch_ohlcv_batch(
+        symbol, granularity_seconds, num_candles
+    ).closed]
 
 
 def _kraken_spot(asset: str) -> dict:
@@ -471,7 +543,8 @@ def stochastic(candles: list, k_period=14, d_period=3):
     return {"k": round(ks[-1], 2), "d": round(sum(ks[-d_period:]) / d_period, 2)}
 
 
-def swing_levels(candles: list, lookback=20) -> dict:
+def swing_levels(candles: list, lookback=20, *, as_of=None) -> dict:
+    candles = only_available_closed_bars(candles, as_of=as_of or _local_now())
     w = candles[-lookback:]
     highs, lows = _h(w), _l(w)
     sh, sl = [], []
@@ -488,19 +561,26 @@ def swing_levels(candles: list, lookback=20) -> dict:
     }
 
 
-def period_extreme(candles: list, n: int) -> dict:
+def period_extreme(candles: list, n: int, *, as_of=None) -> dict:
+    candles = only_available_closed_bars(candles, as_of=as_of or _local_now())
     w = candles[-n:] if len(candles) >= n else candles
+    if not w:
+        return {"high": None, "low": None}
     return {"high": max(_h(w)), "low": min(_l(w))}
 
 
 # ─── Compute all indicators for one timeframe ─────────────────────────────────
 
-def compute_indicators(candles: list) -> dict:
+def compute_indicators(candles: list, *, as_of=None) -> dict:
+    as_of = as_of or _local_now()
+    candles = only_available_closed_bars(candles, as_of=as_of)
+    if not candles:
+        raise ValueError("indicators require at least one available ClosedBar")
     closes  = _c(candles)
     volumes = _v(candles)
     vol_avg = sma(volumes, 20)
     adx_res = adx(candles)
-    swings  = swing_levels(candles, lookback=20)
+    swings  = swing_levels(candles, lookback=20, as_of=as_of)
 
     ind = {
         # EMAs
@@ -531,10 +611,10 @@ def compute_indicators(candles: list) -> dict:
         "resistance":  swings["resistance"],
         "support":     swings["support"],
         # Breakout levels
-        "high_20": period_extreme(candles, 20)["high"],
-        "low_20":  period_extreme(candles, 20)["low"],
-        "high_55": period_extreme(candles, 55)["high"] if len(candles) >= 55 else None,
-        "low_55":  period_extreme(candles, 55)["low"]  if len(candles) >= 55 else None,
+        "high_20": period_extreme(candles, 20, as_of=as_of)["high"],
+        "low_20":  period_extreme(candles, 20, as_of=as_of)["low"],
+        "high_55": period_extreme(candles, 55, as_of=as_of)["high"] if len(candles) >= 55 else None,
+        "low_55":  period_extreme(candles, 55, as_of=as_of)["low"]  if len(candles) >= 55 else None,
     }
     return ind
 
@@ -544,6 +624,14 @@ def compute_indicators(candles: list) -> dict:
 def validate_signal_ready_output(output: dict) -> None:
     """Fail fast when JSON is not usable for the 15m/1h trading routine."""
     errors = []
+    output_time = output.get("timestamp") or _local_now()
+    if isinstance(output_time, str):
+        output_time = datetime.fromisoformat(output_time.replace("Z", "+00:00"))
+    output_time_ms = (
+        int(output_time.timestamp() * 1000)
+        if isinstance(output_time, datetime)
+        else int(output_time)
+    )
     for asset in ASSETS:
         asset_data = output.get("assets", {}).get(asset) or {}
         live = asset_data.get("live") or {}
@@ -555,6 +643,13 @@ def validate_signal_ready_output(output: dict) -> None:
             indicators = asset_data.get("indicators", {}).get(tf) or {}
             if not candles:
                 errors.append(f"{asset} {tf}: candles mancanti")
+                continue
+            if any(c.get("is_final") is not True or c.get("available_at") is None
+                   for c in candles):
+                errors.append(f"{asset} {tf}: presenti dati non ClosedBar")
+                continue
+            if any(int(c["available_at"]) > output_time_ms for c in candles):
+                errors.append(f"{asset} {tf}: ClosedBar non ancora disponibile")
                 continue
             if not indicators:
                 errors.append(f"{asset} {tf}: indicatori mancanti")
@@ -573,7 +668,7 @@ def validate_signal_ready_output(output: dict) -> None:
 
 def main():
     output = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": _local_now().isoformat(),
         "assets": {},
     }
 
@@ -581,6 +676,7 @@ def main():
         print(f"\n[{asset}]")
         asset_data = {
             "timeframes": {},
+            "intrabar": {},
             "indicators": {},
             "live": {},
             "news": [],
@@ -590,13 +686,16 @@ def main():
         for tf, cfg in TIMEFRAME_CONFIG.items():
             print(f"  {tf} ({cfg['limit']} candles)...", end=" ", flush=True)
             try:
-                candles = fetch_ohlcv(asset, cfg["granularity"], cfg["limit"])
+                batch = fetch_ohlcv_batch(asset, cfg["granularity"], cfg["limit"])
+                candles = [bar.to_dict() for bar in batch.closed]
                 asset_data["timeframes"][tf] = candles
+                asset_data["intrabar"][tf] = [bar.to_dict() for bar in batch.intrabar]
                 asset_data["indicators"][tf] = compute_indicators(candles)
                 print("ok")
             except Exception as e:
                 print(f"ERROR: {e}")
                 asset_data["timeframes"][tf] = []
+                asset_data["intrabar"][tf] = []
                 asset_data["indicators"][tf] = {}
             time.sleep(0.1)  # respect Coinbase rate limit
 
@@ -610,6 +709,7 @@ def main():
 
         output["assets"][asset] = asset_data
 
+    output["timestamp"] = _local_now().isoformat()
     validate_signal_ready_output(output)
 
     out_path = Path(__file__).parent / "data" / "market_data.json"

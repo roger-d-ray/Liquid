@@ -5,6 +5,13 @@ description: Analyze a market for range-trading conditions and generate concrete
 
 # Range Trading
 
+## Market-data finality (mandatory)
+
+For every candle-close decision, read only `timeframes[timeframe]` entries with
+`is_final=true` and `available_at` not later than the analysis time. Never use
+`intrabar[timeframe]` for oscillators, range boundaries, swing levels, breakout
+confirmation, or signals. The last REST row may still be changing.
+
 Range trading is a short-to-medium-term strategy that profits from price oscillating between a defined support (floor) and resistance (ceiling) in a market that lacks a clear directional trend. The core action is simple: **buy near the bottom of the range, sell near the top**, and repeat as long as the range holds.
 
 This skill helps you (1) decide whether a market is actually range-bound, (2) locate the range boundaries, (3) generate entry, exit, and stop levels, and (4) flag when the range is at risk of breaking.

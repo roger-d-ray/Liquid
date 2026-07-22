@@ -98,8 +98,8 @@ class DataFetcherValidationTests(unittest.TestCase):
                 asset: {
                     "live": {"price": 100.0},
                     "timeframes": {
-                        "15m": [{"close": 100.0}],
-                        "1h": [{"close": 100.0}],
+                        "15m": [{"close": 100.0, "is_final": True, "available_at": 0}],
+                        "1h": [{"close": 100.0, "is_final": True, "available_at": 0}],
                     },
                     "indicators": {
                         "15m": dict(indicators),

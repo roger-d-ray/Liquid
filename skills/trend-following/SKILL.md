@@ -5,6 +5,13 @@ description: Analyze a market for a prevailing trend and generate concrete entry
 
 # Trend Following
 
+## Market-data finality (mandatory)
+
+For moving averages, swing structure, multi-candle confirmations, and every
+bar-close signal, read only `timeframes[timeframe]` entries with `is_final=true`
+and `available_at` not later than the analysis time. Never treat
+`intrabar[timeframe]` as a closed candle; the last REST row may still change.
+
 Trend following (also called trend trading) identifies the prevailing direction of a market and trades **in that direction for as long as the trend lasts**. The guiding mantra is "the trend is your friend." When an uptrend is in place you take long positions to profit from further appreciation; in a downtrend you take short positions to profit from falling prices.
 
 This skill helps you (1) confirm a trend exists and in which direction, (2) confirm it with a momentum indicator, (3) generate an entry, and (4) define stop-loss and exit rules to ride the trend and get out when it turns.

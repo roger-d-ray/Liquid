@@ -39,6 +39,9 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
    - **0b. Gestione posizioni aperte:** aggiorna lo snapshot e applica `manage_positions.py` — vedi sezione "Gestione intraday intelligente". Protegge profitti, chiude trade fermi e sostituisce il vecchio max-hold cieco.
    - **0c. Flatten intraday:** esegui `intraday_exit.py` come backstop finale anti-overnight — vedi sezione "Flatten automatico". Va eseguito ad ogni run, prima di cercare nuovi setup, così libera slot/esposizione e garantisce zero overnight.
 1. Esegui data_fetcher.py → genera data/market_data.json
+   - `timeframes[tf]` contiene esclusivamente `ClosedBar`; `intrabar[tf]` contiene
+     snapshot parziali separati. Indicatori, swing e segnali bar-close devono
+     usare solo barre con `is_final=true` e `available_at <= timestamp` della run.
 2. Leggi market_data.json e applica le 3 skill
 3. Per il segnale migliore (confidence più alta), esegui risk_manager.py
 4. Se approvato, invia notifica Telegram con telegram_notify.py

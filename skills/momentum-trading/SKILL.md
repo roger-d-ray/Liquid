@@ -5,6 +5,13 @@ description: Analyze a market for momentum and generate concrete buy-strength / 
 
 # Momentum Trading
 
+## Market-data finality (mandatory)
+
+For every candle-close trigger, read only `timeframes[timeframe]` entries with
+`is_final=true` and `available_at` not later than the analysis time. Never use
+`intrabar[timeframe]` for indicators, breakouts, volume confirmation, swing
+levels, or entry signals. The last REST row may be a changing live snapshot.
+
 Momentum trading means **buying strength and selling weakness**: following price that is already moving, riding the move while it has speed, and exiting when momentum fades. The premise is that strong moves tend to keep moving because new participants pile in (herding), creating a self-feeding loop until momentum dries up. It works on any liquid market and fits both day and swing timeframes.
 
 This skill helps you (1) confirm momentum exists and in which direction, (2) wait for a concrete entry trigger, (3) enter on a finished candle, (4) manage risk with a stop and trailing exit, and (5) exit when momentum fades.
