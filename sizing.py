@@ -19,6 +19,12 @@ from __future__ import annotations
 import math
 
 
+# A margin-constrained trade may be reduced, but it must retain at least 75% of
+# the intended stop risk and may never risk less than 0.75% of account equity.
+MIN_RISK_RETENTION = 0.75
+MIN_ABSOLUTE_RISK_PCT = 0.0075
+
+
 def compute_size(equity: float, risk_pct: float, entry: float,
                  stop_loss: float, leverage: float = 1.0) -> dict:
     """Return a sizing breakdown for a proposal.
@@ -89,15 +95,22 @@ def fit_leverage_to_margin(equity: float, available_balance, risk_pct: float,
     """Size a trade and, if its margin doesn't fit, RAISE leverage (up to the
     cap) before giving up — then discard if it still doesn't fit.
 
-    The notional is fixed by risk-based sizing (independent of leverage), so
+    The ideal notional is fixed by risk-based sizing (independent of leverage), so
     margin = notional / leverage: raising leverage lowers margin without changing
     the € risk. We compute the minimum leverage that fits inside the tightest of
     three budgets (per-asset cap, total cap, available balance), bounded by the
     liquidation-safe ceiling.
 
+    When the ideal position does not fit even at the leverage ceiling, the
+    notional is clipped to the available margin budget. The smaller trade is
+    accepted only if its actual stop risk retains at least
+    MIN_RISK_RETENTION of the target risk and is at least
+    MIN_ABSOLUTE_RISK_PCT of equity.
+
     Returns the compute_size() dict plus: fits (bool), leverage (final),
-    requested_leverage, adjusted (bool), notional, margin_budget, and a human
-    `reason`. Caps default to risk_manager's (single source of truth).
+    requested_leverage, adjusted (bool), notional, margin_budget, target/actual
+    risk metadata, and a human `reason`. Caps default to risk_manager's (single
+    source of truth).
     """
     from risk_manager import (MAX_LEVERAGE, MAX_TOTAL_MARGIN_PCT,
                               MAX_PER_ASSET_MARGIN_PCT)
@@ -105,9 +118,22 @@ def fit_leverage_to_margin(equity: float, available_balance, risk_pct: float,
     max_total_margin_pct     = MAX_TOTAL_MARGIN_PCT if max_total_margin_pct is None else max_total_margin_pct
     max_per_asset_margin_pct = MAX_PER_ASSET_MARGIN_PCT if max_per_asset_margin_pct is None else max_per_asset_margin_pct
 
+    equity     = float(equity)
+    risk_pct   = float(risk_pct)
+    entry      = float(entry)
+    stop_loss  = float(stop_loss)
+    leverage   = float(leverage)
+
     base       = compute_size(equity, risk_pct, entry, stop_loss, leverage)
-    notional   = base["size_usd"]
+    # Keep full precision for acceptance decisions; round only returned values.
+    stop_dist  = abs(entry - stop_loss)
+    notional   = risk_pct * equity / stop_dist * entry
     stop_pct   = base["stop_dist_pct"]
+    target_risk_usd = risk_pct * equity
+    minimum_risk_pct = max(
+        risk_pct * MIN_RISK_RETENTION,
+        MIN_ABSOLUTE_RISK_PCT,
+    )
 
     existing_total_margin = float(existing_total_margin or 0.0)
     existing_asset_margin = float(existing_asset_margin or 0.0)
@@ -123,6 +149,13 @@ def fit_leverage_to_margin(equity: float, available_balance, risk_pct: float,
         **base,
         "requested_leverage": float(leverage),
         "notional":           round(notional, 2),
+        "target_size_usd":    round(notional, 2),
+        "target_risk_pct":    round(risk_pct, 4),
+        "target_risk_usd":    round(target_risk_usd, 2),
+        "minimum_risk_pct":   round(minimum_risk_pct, 4),
+        "risk_retention":     1.0,
+        "size_adjusted":      False,
+        "leverage_adjusted":  False,
         "margin_budget":      round(budget, 2),
         "leverage_ceiling":   round(lev_ceiling, 2),
     }
@@ -137,17 +170,60 @@ def fit_leverage_to_margin(equity: float, available_balance, risk_pct: float,
     final_lev  = math.ceil(max(float(leverage), lev_needed))  # integer, extra headroom
 
     if final_lev > lev_ceiling + 1e-9:
-        margin_at_ceiling = notional / lev_ceiling
-        out.update(compute_size(equity, risk_pct, entry, stop_loss, lev_ceiling))
-        out.update(fits=False, adjusted=False, leverage=round(lev_ceiling, 2),
-                   reason=(f"Margine troppo alto anche alla leva massima utile "
-                           f"({lev_ceiling:.0f}x): servono ~${margin_at_ceiling:,.0f} "
-                           f"ma il budget è ${budget:,.0f}. Trade scartato."))
+        max_notional = budget * lev_ceiling
+        actual_risk_usd = max_notional * stop_dist / entry
+        actual_risk_pct = actual_risk_usd / equity
+        risk_retention = actual_risk_pct / risk_pct
+        clipped = compute_size(
+            equity, actual_risk_pct, entry, stop_loss, lev_ceiling
+        )
+        leverage_adjusted = lev_ceiling > leverage + 1e-9
+
+        out.update(clipped)
+        out.update(
+            leverage=round(lev_ceiling, 2),
+            requested_leverage=float(leverage),
+            notional=round(max_notional, 2),
+            target_size_usd=round(notional, 2),
+            target_risk_pct=round(risk_pct, 4),
+            target_risk_usd=round(target_risk_usd, 2),
+            minimum_risk_pct=round(minimum_risk_pct, 4),
+            risk_retention=round(risk_retention, 4),
+            size_adjusted=True,
+            leverage_adjusted=leverage_adjusted,
+            margin_budget=round(budget, 2),
+            leverage_ceiling=round(lev_ceiling, 2),
+        )
+
+        if actual_risk_pct + 1e-12 >= minimum_risk_pct:
+            out.update(
+                fits=True,
+                adjusted=True,
+                reason=(
+                    f"Size ridotta per rientrare nel margine: rischio effettivo "
+                    f"{actual_risk_pct*100:.2f}% (retention "
+                    f"{risk_retention*100:.1f}%) ≥ minimo "
+                    f"{minimum_risk_pct*100:.2f}%."
+                ),
+            )
+        else:
+            out.update(
+                fits=False,
+                adjusted=False,
+                reason=(
+                    f"Trade scartato: la size massima consentita rischierebbe "
+                    f"{actual_risk_pct*100:.2f}% dell'equity, sotto il minimo "
+                    f"{minimum_risk_pct*100:.2f}% (retention "
+                    f"{risk_retention*100:.1f}%, richiesto almeno "
+                    f"{MIN_RISK_RETENTION*100:.0f}%)."
+                ),
+            )
         return out
 
     adjusted = final_lev > float(leverage) + 1e-9
     out.update(compute_size(equity, risk_pct, entry, stop_loss, final_lev))
     out.update(fits=True, adjusted=adjusted, leverage=float(final_lev),
+               leverage_adjusted=adjusted, size_adjusted=False,
                requested_leverage=float(leverage),
                notional=round(notional, 2), margin_budget=round(budget, 2),
                leverage_ceiling=round(lev_ceiling, 2))

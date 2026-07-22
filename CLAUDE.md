@@ -22,6 +22,12 @@ Prima di qualunque azione MCP che modifica il conto (`execute_order`,
 `python trading_mode.py --require-live`. Se fallisce, NON chiamare il tool MCP
 e notifica Telegram con il motivo.
 
+Il gate locale NON basta a garantire che Co-Invest sia in live. All'inizio di
+ogni run verifica anche la modalita reale del connector Co-Invest con
+`paper_trading_status()` o tool equivalente. Se Co-Invest risulta in paper, NON
+eseguire `execute_order`, `close_positions_batch` o modifiche posizione: notifica
+Telegram e fermati. Non attivare/disattivare paper automaticamente dalla routine.
+
 Il reset paper e' disabilitato in questa routine: non chiamare mai
 `enable_paper_trading()` o `reset_paper_account()` e ignora eventuali flag
 `data/reset_request.json`.
@@ -29,14 +35,14 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
 ## Flusso ad ogni run
 
 0. **Housekeeping live + Flatten intraday (PRIMA di tutto):**
-   - **0a. Reset paper:** vietato in live. Non chiamare `enable_paper_trading()` o `reset_paper_account()`. Ignora eventuali reset pending e prosegui.
+   - **0a. Pre-flight live reale:** esegui `python trading_mode.py --require-live`, poi verifica Co-Invest con `paper_trading_status()` o tool equivalente. Se Co-Invest e' in paper, notifica Telegram e fermati. Non chiamare `enable_paper_trading()` o `reset_paper_account()`. Ignora eventuali reset pending e prosegui solo se Co-Invest e' live.
    - **0b. Gestione posizioni aperte:** aggiorna lo snapshot e applica `manage_positions.py` — vedi sezione "Gestione intraday intelligente". Protegge profitti, chiude trade fermi e sostituisce il vecchio max-hold cieco.
    - **0c. Flatten intraday:** esegui `intraday_exit.py` come backstop finale anti-overnight — vedi sezione "Flatten automatico". Va eseguito ad ogni run, prima di cercare nuovi setup, così libera slot/esposizione e garantisce zero overnight.
 1. Esegui data_fetcher.py → genera data/market_data.json
 2. Leggi market_data.json e applica le 3 skill
 3. Per il segnale migliore (confidence più alta), esegui risk_manager.py
 4. Se approvato, invia notifica Telegram con telegram_notify.py
-5. Se risposta è "accetta", esegui `python trading_mode.py --require-live`; solo se passa chiama execute_order() di Co-Invest (esecuzione diretta — la conferma Telegram è l'unica autorizzazione richiesta)
+5. Se risposta è "accetta", esegui `python trading_mode.py --require-live` e ri-verifica che Co-Invest non sia in paper; solo se entrambi passano chiama execute_order() di Co-Invest (esecuzione diretta — la conferma Telegram è l'unica autorizzazione richiesta)
    Subito dopo l'esecuzione, chiama get_portfolio() e invia su Telegram un messaggio di conferma con riepilogo portafoglio (equity, margine usato, disponibile, posizioni aperte)
 6. Logga il risultato in logs/proposals.jsonl
 7. **Aggiorna lo snapshot E fai il push del portafoglio su Telegram** (ad ogni run, anche senza trade):
@@ -48,7 +54,7 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
 
 Dopo approvazione Telegram (exit code 0 da telegram_notify.py):
 
-1. Esegui `python trading_mode.py --require-live`, poi chiama `execute_order()` via Co-Invest MCP con i parametri validati dal risk_manager:
+1. Esegui `python trading_mode.py --require-live` e ri-verifica che Co-Invest non sia in paper, poi chiama `execute_order()` via Co-Invest MCP con i parametri validati dal risk_manager:
    - symbol: asset (es. "BTC")
    - side: "buy" (long) o "sell" (short)
    - size: notionale in USD. Dimensiona sul RISCHIO, non sulla leva: `rischio_$ = risk_pct × equity` (risk_pct = 3–5%, vedi Modalità intraday), poi `size_coin = rischio_$ / |entry − stop_loss|`, `size = size_coin × entry`. La leva NON entra nel calcolo del rischio: determina solo il margine impegnato (`margine = size / leverage`) e la distanza di liquidazione.
@@ -61,13 +67,14 @@ Dopo approvazione Telegram (exit code 0 da telegram_notify.py):
    ⚠️ **La size va calcolata PRIMA della notifica, non dopo l'approvazione**, così il messaggio Telegram mostra quanto stai investendo. Usa `sizing.plan_trade(proposal, snapshot)` (snapshot = `portfolio.from_coinvest(get_portfolio())`, con `total_equity`/`available_balance`/`positions`). `plan_trade`:
    - calcola `size_usd` (notionale), `margin_usd`, `risk_usd`;
    - se il margine del nuovo trade **non rientra** nel budget (cap per-asset 40% / totale 60% / disponibile), **alza la leva** fino al tetto utile (≤ MAX_LEVERAGE e ≤ tetto liq-safe) per farlo rientrare;
-   - se non rientra **neanche** alla leva massima utile, ritorna `fits=False`.
+   - se non rientra **neanche** alla leva massima utile, riduce il nozionale al massimo consentito dal budget senza modificare entry, stop o target;
+   - accetta la size ridotta solo se il rischio effettivo conserva almeno il **75% del rischio ideale** e non scende mai sotto lo **0,75% dell'equity**: `actual_risk_pct >= max(target_risk_pct × 0.75, 0.0075)`; altrimenti ritorna `fits=False`.
 
    Comportamento richiesto:
-   - Se `fits=False`: **NON notificare**. Invia `python telegram_notify.py --message "❌ Trade scartato (margine): <reason>"`, logga `{"result":"discarded_margin","reason":...}`, prosegui.
-   - Se `fits=True`: scrivi nel proposal `size_usd`, `margin_usd`, `risk_usd`, `equity`, `risk_pct`, `leverage` (la leva **finale**, eventualmente alzata), e — se `adjusted=True` — anche `requested_leverage` e `adjusted` (così la proposta mostra "⚙️ Leva adattata"). Poi chiama `telegram_notify.py`.
+   - Se `fits=False`: **NON notificare la proposta**. Invia `python telegram_notify.py --message "❌ Trade scartato (margine/rischio minimo): <reason>"`, logga `{"result":"discarded_margin","reason":...}`, prosegui.
+   - Se `fits=True`: scrivi nel proposal `size_usd`, `margin_usd`, `risk_usd`, `equity`, `risk_pct`, `leverage` (valori **effettivi** dell'ordine). Conserva il rischio ideale in `target_risk_pct`/`target_risk_usd`. Se la size è stata ridotta, includi `size_adjusted=true` e `risk_retention`; se la leva è stata alzata, includi `requested_leverage` e `leverage_adjusted=true`. Poi chiama `telegram_notify.py`.
    - `send_proposal`/`format_proposal` mostrano "💰 Investito / 🔒 Margine / ⚠️ Rischio se SL" (+ eventuale nota leva). Alla conferma, passa a `execute_order()` lo **stesso** `size_usd` e la **stessa** `leverage` finale (unica fonte di verità: nessuna divergenza tra ciò che approvi e ciò che viene eseguito).
-2. Dopo execute_order(), chiama `get_portfolio()` e costruisci il messaggio Telegram:
+2. Dopo execute_order(), controlla la risposta: se contiene `exchange="paper"` o un indicatore equivalente di paper trading, considera la run NON live, notifica l'errore e fermati senza descriverla come trade reale. Se la risposta conferma live, chiama `get_portfolio()` e costruisci il messaggio Telegram:
 
    ✅ Trade eseguito! [emoji] [ASSET] [SIGNAL.upper()] · [leverage]x · $[size]
    Entry: $[entry] Take Profit: $[target] Stop Loss: $[stop_loss] R/R: [rr_ratio] Confidence: [conf]%
@@ -151,6 +158,7 @@ Non includere istruzioni di reset paper nel prompt routine live.
 - Analisi e segnale su 15m/1h, mai su 4h/1d (4h/1d = solo contesto)
 - Nessuna credenziale nel codice: leggi sempre da variabili d'ambiente
 - In live, prima di qualunque ordine/chiusura/modifica posizione deve passare `python trading_mode.py --require-live`
+- In live deve passare anche il controllo Co-Invest: se `paper_trading_status()` o la risposta MCP indicano paper, fermati e non eseguire azioni conto
 - In live, il reset paper e' vietato: non chiamare `reset_paper_account()`
 - Le skill in skills/ sono la fonte di verità: non ignorarle mai
 
@@ -212,7 +220,12 @@ Opzione A (client REST diretto con chiavi in `.env`) resta **non necessaria** fi
 
 // Sizing — calcolato da sizing.compute_size() PRIMA della notifica (mostrato in proposta):
 "equity": float,        // equity del conto (da get_portfolio)
+"target_risk_pct": float, // rischio ideale richiesto dalla strategia
+"target_risk_usd": float, // target_risk_pct × equity
+"risk_pct": float,      // rischio effettivo dell'ordine (può essere ridotto)
 "risk_usd": float,      // risk_pct × equity = € persi se scatta lo SL
+"risk_retention": float, // risk_pct / target_risk_pct
+"size_adjusted": bool,  // true se il nozionale è stato ridotto per il margine
 "size_usd": float,      // notionale investito (= size_coin × entry)
 "margin_usd": float     // size_usd / leverage = capitale realmente impegnato
 }

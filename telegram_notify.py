@@ -163,6 +163,8 @@ def _sizing_lines(proposal: dict) -> list[str]:
 
     Reads size_usd (notional), leverage, margin_usd, risk_usd, risk_pct. Derives
     margin from size_usd/leverage and risk from risk_pct*equity when not given.
+    When sizing reduced the trade, target_risk_pct/target_risk_usd preserve the
+    intended risk while risk_pct/risk_usd always describe the executable order.
     Returns [] when there is no size to show (graceful degradation)."""
     size_usd = proposal.get("size_usd", proposal.get("size"))
     if size_usd is None:
@@ -198,6 +200,20 @@ def _sizing_lines(proposal: dict) -> list[str]:
         lines.append(f"🔒 *Margine impegnato (stima):* {_money(margin)}")
     if risk_usd is not None:
         lines.append(f"⚠️ *Rischio se tocca SL (stima):* {_money(risk_usd)}{risk_pct_str}")
+    if proposal.get("size_adjusted"):
+        try:
+            target_pct = float(proposal["target_risk_pct"])
+            actual_pct = float(proposal["risk_pct"])
+            retention = float(proposal.get("risk_retention", actual_pct / target_pct))
+            target_usd = proposal.get("target_risk_usd")
+            target_money = f" / {_money(float(target_usd))}" if target_usd is not None else ""
+            lines.append(
+                f"📉 *Size adattata:* rischio ideale {target_pct*100:.2f}%"
+                f"{target_money} → effettivo {actual_pct*100:.2f}% "
+                f"({retention*100:.1f}% conservato)"
+            )
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            pass
     # Note when the guard raised leverage to fit the margin budget, so the shown
     # leverage differs from what the strategy proposed — transparency for approval.
     if proposal.get("adjusted") and proposal.get("requested_leverage"):
@@ -224,11 +240,12 @@ def format_proposal(proposal: dict) -> str:
     rr_str = f"{rr:.2f}" if rr is not None else "—"
     conf_str = f"{round(proposal.get('confidence', 0) * 100, 1)}%"
     motivation = proposal.get("motivation") or proposal.get("reason") or ""
+    strategy = str(proposal.get("strategy", "?")).replace("_", "-")
 
     lines = [
         f"🔔 *Liquid Bot — Nuova Proposta* {side_emoji}",
         "",
-        f"*Strategia:*  {proposal.get('strategy', '?')}",
+        f"*Strategia:*  {strategy}",
         f"*Asset:*      {proposal.get('asset', '?')}",
         f"*Side:*       {proposal.get('signal', '?').upper()}",
         f"*Timeframe:*  {proposal.get('timeframe', '?')}",

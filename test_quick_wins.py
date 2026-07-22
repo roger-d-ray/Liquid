@@ -10,6 +10,7 @@ import intraday_exit
 import manage_positions
 import paper_reset
 import risk_manager
+import sizing
 import telegram_notify
 import trading_mode
 
@@ -120,7 +121,125 @@ class DataFetcherValidationTests(unittest.TestCase):
             data_fetcher.validate_signal_ready_output(output)
 
 
+class AdaptiveSizingTests(unittest.TestCase):
+    def fit(self, **overrides):
+        params = {
+            "equity": 100.0,
+            "available_balance": 100.0,
+            "risk_pct": 0.04,
+            "entry": 100.0,
+            "stop_loss": 99.0,
+            "leverage": 1.0,
+            "max_leverage": 10.0,
+            "max_total_margin_pct": 0.30,
+            "max_per_asset_margin_pct": 0.30,
+        }
+        params.update(overrides)
+        return sizing.fit_leverage_to_margin(**params)
+
+    def test_ideal_size_that_fits_is_not_reduced(self):
+        result = self.fit(risk_pct=0.02, max_total_margin_pct=0.40,
+                          max_per_asset_margin_pct=0.40)
+
+        self.assertTrue(result["fits"], result)
+        self.assertFalse(result["size_adjusted"])
+        self.assertEqual(result["risk_pct"], result["target_risk_pct"])
+        self.assertEqual(result["risk_retention"], 1.0)
+
+    def test_reduced_size_at_exactly_75_percent_is_accepted(self):
+        result = self.fit()
+
+        self.assertTrue(result["fits"], result)
+        self.assertTrue(result["size_adjusted"])
+        self.assertAlmostEqual(result["risk_pct"], 0.03, places=4)
+        self.assertAlmostEqual(result["target_risk_pct"], 0.04, places=4)
+        self.assertAlmostEqual(result["risk_retention"], 0.75, places=4)
+        self.assertLessEqual(result["margin_usd"], result["margin_budget"])
+
+    def test_reduced_size_below_75_percent_is_rejected(self):
+        result = self.fit(max_total_margin_pct=0.299,
+                          max_per_asset_margin_pct=0.299)
+
+        self.assertFalse(result["fits"], result)
+        self.assertTrue(result["size_adjusted"])
+        self.assertLess(result["risk_retention"], 0.75)
+        self.assertIn("richiesto almeno 75%", result["reason"])
+
+    def test_absolute_075_percent_floor_is_enforced(self):
+        result = self.fit(
+            risk_pct=0.008,
+            max_total_margin_pct=0.07,
+            max_per_asset_margin_pct=0.07,
+        )
+
+        self.assertFalse(result["fits"], result)
+        self.assertAlmostEqual(result["minimum_risk_pct"], 0.0075, places=4)
+        self.assertAlmostEqual(result["risk_pct"], 0.007, places=4)
+
+    def test_previous_btc_setup_is_accepted_with_reduced_risk(self):
+        result = sizing.fit_leverage_to_margin(
+            equity=154.92,
+            available_balance=154.92,
+            risk_pct=0.03,
+            entry=66820.7,
+            stop_loss=66600.0,
+            leverage=10.0,
+        )
+
+        self.assertTrue(result["fits"], result)
+        self.assertTrue(result["size_adjusted"])
+        self.assertAlmostEqual(result["risk_pct"], 0.0264, places=4)
+        self.assertGreaterEqual(result["risk_retention"], 0.75)
+        self.assertLessEqual(result["margin_usd"], result["margin_budget"])
+
+
 class TelegramNotifyTests(unittest.TestCase):
+    def test_format_proposal_displays_strategy_without_markdown_underscore(self):
+        msg = telegram_notify.format_proposal({
+            "strategy": "momentum_trading",
+            "asset": "BTC",
+            "signal": "long",
+            "timeframe": "15m",
+            "entry": 100,
+            "target": 103,
+            "stop_loss": 99,
+            "leverage": 10,
+            "confidence": 0.7,
+            "risk_reward": 2.0,
+        })
+
+        self.assertIn("momentum-trading", msg)
+        self.assertNotIn("momentum_trading", msg)
+
+    def test_format_proposal_displays_adapted_risk(self):
+        msg = telegram_notify.format_proposal({
+            "strategy": "momentum-trading",
+            "asset": "BTC",
+            "signal": "long",
+            "timeframe": "15m",
+            "entry": 66820.7,
+            "target": 67350.0,
+            "stop_loss": 66600.0,
+            "leverage": 20,
+            "requested_leverage": 10,
+            "confidence": 0.64,
+            "risk_reward": 2.4,
+            "equity": 154.92,
+            "size_usd": 1239.36,
+            "margin_usd": 61.97,
+            "risk_pct": 0.0264,
+            "risk_usd": 4.09,
+            "target_risk_pct": 0.03,
+            "target_risk_usd": 4.65,
+            "risk_retention": 0.88,
+            "size_adjusted": True,
+            "adjusted": True,
+        })
+
+        self.assertIn("Rischio se tocca SL (stima):* $4.09 (2.6% equity)", msg)
+        self.assertIn("rischio ideale 3.00% / $4.65", msg)
+        self.assertIn("effettivo 2.64% (88.0% conservato)", msg)
+
     def test_notify_and_wait_uses_offset_captured_before_send(self):
         calls = {}
 

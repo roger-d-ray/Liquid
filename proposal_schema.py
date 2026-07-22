@@ -67,6 +67,15 @@ NUMERIC_FIELDS = (
     "macd_histogram",
     "support",
     "resistance",
+    "target_risk_pct",
+    "risk_pct",
+    "minimum_risk_pct",
+    "target_risk_usd",
+    "risk_usd",
+    "risk_retention",
+    "target_size_usd",
+    "size_usd",
+    "margin_usd",
 )
 
 
