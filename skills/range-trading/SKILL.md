@@ -1,131 +1,222 @@
 ---
 name: range-trading
-description: Analyze a market for range-trading conditions and generate concrete buy/sell signals around support and resistance. Use this skill whenever the user wants to range-trade, asks to find or evaluate a trading range, mentions support and resistance levels, asks "is this asset range-bound", wants entry/exit/stop levels for a sideways market, or asks whether a market is suitable for buying-the-dip-and-selling-the-rip within a band. Trigger this even when the user only describes the behavior (e.g. "this thing keeps bouncing between two prices, where do I get in?") without naming the strategy.
+description: Analyze finalized OHLCV data to determine whether an asset is trading inside a horizontal range, identify support and resistance zones, assess regime and breakout risk, and produce conditional or confirmed mean-reversion trade plans with entries, targets, stops, costs, net risk-reward, and optional position sizing. Use when the user asks whether a market is range-bound, wants range levels or repeated support/resistance bounces, asks where to buy near support or sell, exit, or short near resistance in a sideways market, or describes price as repeatedly bouncing between two levels. Do not use for breakout trading, trend following, arbitrage, long-term valuation, or live order execution.
 ---
 
 # Range Trading
 
-## Market-data finality (mandatory)
+## Objective
 
-For every candle-close decision, read only `timeframes[timeframe]` entries with
-`is_final=true` and `available_at` not later than the analysis time. Never use
-`intrabar[timeframe]` for oscillators, range boundaries, swing levels, breakout
-confirmation, or signals. The last REST row may still be changing.
+Determine whether a stable horizontal range exists and return one of four states:
 
-Range trading is a short-to-medium-term strategy that profits from price oscillating between a defined support (floor) and resistance (ceiling) in a market that lacks a clear directional trend. The core action is simple: **buy near the bottom of the range, sell near the top**, and repeat as long as the range holds.
+1. **Confirmed setup** — every mandatory gate passes on finalized data.
+2. **Conditional setup** — the range is valid, but price location or closed-bar confirmation is incomplete.
+3. **No trade** — one or more mandatory gates fail.
+4. **Insufficient data** — freshness, history, costs, or required fields are inadequate for a defensible conclusion.
 
-This skill helps you (1) decide whether a market is actually range-bound, (2) locate the range boundaries, (3) generate entry, exit, and stop levels, and (4) flag when the range is at risk of breaking.
+Prefer no trade over a weak or invented signal.
 
-The single most important judgment is the first one. Range trading only works in **stable, sideways, non-trending markets**. In a strong trend, applying this strategy will repeatedly put you on the wrong side of the move. So the analysis always starts by confirming the absence of a trend before doing anything else.
+## Non-negotiable rules
 
-## When this strategy fits
+- Base indicators, pivots, range boundaries, confirmations, and breakout decisions only on candles with `is_final=true` and `available_at <= analysis_time`.
+- Treat a live or non-final quote only as execution context. Never let it create, confirm, or invalidate a signal by itself.
+- Never invent prices, indicator values, fees, volume, account size, short availability, or data freshness.
+- Treat support and resistance as zones, not exact ticks.
+- Distinguish **selling an existing long** from **opening a short**. Propose a new short only when shorting is allowed or explicitly requested.
+- Never widen an initial stop after entry. Tighten it only under a predeclared rule.
+- Calculate trade economics after spread, fees, slippage, funding, and borrow costs when those inputs are available.
+- Label every numeric threshold as a default heuristic unless the user supplies a preferred rule set.
+- Do not execute orders. Provide technical analysis or a paper-trade plan only.
 
-Range trading is suitable when:
+## Load supporting guidance
 
-- Price is oscillating between two roughly horizontal levels without breaking beyond them.
-- There is no strong directional trend (this is the precondition — see the trend filter below).
-- The market is relatively stable, so the boundaries are respected repeatedly.
-  It works across forex, stocks, indices, commodities, and crypto. The main difference between instruments is **volatility**, which sets how wide the range is and how much risk each trade carries. Higher-volatility instruments (e.g. Bitcoin) mean wider ranges, bigger potential returns, and bigger risk. In forex, currency crosses that exclude the USD (e.g. EUR/CHF) tend to trend weakly and range more often, making them natural candidates. Indices like the S&P 500 trend upward over the long run but still offer intraday ranges.
+- Read `references/data-contract.md` when data fields, freshness, timeframes, costs, or instrument constraints are unclear.
+- Read `references/methodology.md` before constructing zones, classifying the regime, or calculating entry, stop, target, and breakout conditions.
+- Read `references/examples.md` when output style or decision-state wording is unclear.
+- When raw OHLCV is available as a local CSV or JSON file, run `scripts/compute_range_metrics.py` and use its output as diagnostics. Do not treat the script output as a trade recommendation.
 
-Do **not** range-trade when the market is trending strongly or is highly volatile with expanding boundaries — in those conditions the price is likely to break out of the range, and a trend-following or momentum approach is more appropriate.
+## Workflow
 
-## Analysis workflow
+Follow the sequence below. Do not jump directly from a visible support level to a signal.
 
-Follow these steps in order. Do not skip the trend filter — it is what protects you from applying this strategy in the wrong conditions.
+### 1. Establish scope and constraints
 
-### Step 1 — Confirm the market is range-bound (trend filter)
+Identify or obtain:
 
-Before looking for a range, confirm there is no dominant trend. Use these checks together; agreement across them increases confidence:
+- asset, venue, and instrument type;
+- primary analysis timeframe and `analysis_time`;
+- finalized OHLCV history;
+- allowed directions: long-only, exit-only, or long/short;
+- tick size and estimated trading costs when available;
+- optional higher-timeframe context;
+- optional account risk budget for position sizing.
 
-- **ADX (Average Directional Index):** A reading **below ~25** indicates a weak or absent trend, which favors range trading. A reading climbing above ~25–30 signals a trend is taking over — range trading becomes unsafe.
-- **Moving average behavior:** If a medium-term moving average (e.g. 50-period) is roughly **flat / horizontal**, that supports a range. A steeply sloped MA indicates a trend.
-- **Visual structure:** Price should be making roughly **equal highs and equal lows**, not a staircase of higher highs / higher lows (uptrend) or lower highs / lower lows (downtrend).
-  If the trend filter says "trending," stop here and tell the user range trading is not appropriate right now, and why. Suggest considering a trend-following approach instead.
+If essential data is missing, return **Insufficient data** and specify exactly what is missing. Do not silently substitute generic market data.
 
-### Step 2 — Define the range boundaries
+### 2. Validate data quality and finality
 
-Identify the **support** (lower boundary, where price repeatedly stops falling and bounces up) and **resistance** (upper boundary, where price repeatedly stops rising and turns down).
+- Sort bars chronologically, remove or resolve duplicate timestamps, and keep one consistent timezone.
+- Require valid OHLC values and enough finalized history for the selected indicators and range lookback.
+- Use at least 80 finalized bars for a limited assessment; prefer 150–200 or more.
+- Verify that precomputed indicators use the same finalized bars, timeframe, and disclosed periods.
+- State the last finalized candle timestamp and the data source or input origin.
 
-Quality criteria for a tradeable range:
+If the data fails these checks, stop with **Insufficient data**.
 
-- **Multiple touches:** Each boundary should have been tested at least **2–3 times**. A single touch is not a confirmed level. More touches = stronger, more reliable boundary.
-- **Sufficient width:** The gap between support and resistance must be wide enough that a trade from one side to the other clears costs (spread/fees) and leaves meaningful profit after accounting for a stop placed outside the range. A very narrow range is not worth trading.
-- **Roughly horizontal:** The boundaries should be approximately flat. Sloping boundaries indicate a trend or a channel, which this skill does not target.
-  State the support price, the resistance price, and the range width explicitly.
+### 3. Classify the market regime
 
-### Step 3 — Confirm entries with oscillators
+Evaluate the primary timeframe with multiple independent measures:
 
-Don't buy at support or sell at resistance purely because price is there — confirm that the boundary is likely to hold. Use one or more of:
+- ADX level and direction;
+- normalized medium-term moving-average slope;
+- directional efficiency ratio or equivalent price-path measure;
+- volatility expansion or contraction;
+- swing structure: horizontal highs/lows versus directional stair-stepping.
 
-- **RSI (Relative Strength Index):** Near support, look for RSI in **oversold** territory (typically ≤30) and ideally turning up — confirmation of a likely bounce. Near resistance, look for RSI **overbought** (typically ≥70) and turning down — confirmation of a likely rejection.
-- **Bollinger Bands:** Price tagging the **lower band** near support supports a long; price tagging the **upper band** near resistance supports a short. In a range, price tends to revert toward the middle band.
-- **Bounce confirmation:** A reversal candle or a small turn off the level adds confidence versus catching a falling knife.
-  If price reaches a boundary but the oscillator does **not** confirm (e.g. price at support but RSI still falling hard with no oversold reading), treat it as a warning that the boundary may break rather than hold.
+Use the defaults in `references/methodology.md`. Do not classify a market as range-bound from low ADX alone.
 
-### Step 4 — Generate the signal
+Apply these rules:
 
-A complete range-trading signal specifies all of the following:
+- If at least two independent measures support a range and none is strongly adverse, continue.
+- If trend evidence is strong, return **No trade** for range trading.
+- If the evidence is mixed, continue only as a **Conditional setup** and lower confidence.
+- Use a higher timeframe as context, not as a hidden veto. In a strong higher-timeframe uptrend, favor long bounces and downgrade shorts; reverse this logic in a downtrend.
 
-- **Direction:** Long near support, short near resistance.
-- **Entry zone:** A price near the boundary (not a single tick — boundaries are zones).
-- **Target (take-profit):** The opposite boundary, or slightly before it to exit ahead of the crowd.
-- **Stop-loss:** Placed **outside the range**, beyond the boundary you entered at (see stop-loss rules below).
-- **Risk-reward check:** Confirm the distance to target is acceptably larger than the distance to stop. Reject the trade if the ratio is unfavorable.
+### 4. Construct and validate the range
 
-### Step 5 — Flag breakout risk
+Build support and resistance zones from finalized pivot clusters that existed before the prospective signal bar.
 
-Always note conditions that suggest the range is about to break, because a breakout is the primary risk of this strategy:
+Require:
 
-- ADX rising through ~25–30.
-- Price closing decisively beyond a boundary (not just an intrabar wick).
-- A surge in volatility or volume at a boundary.
-- The oscillator failing to confirm at the boundary (Step 3).
-  If breakout risk is elevated, say so and recommend standing aside or tightening risk.
+- at least two independent rejection events at each boundary; prefer three;
+- meaningful time separation between tests;
+- approximately horizontal zones within an ATR- or percentage-based tolerance;
+- evidence of alternating movement between the lower and upper parts of the band;
+- sufficient containment of closes inside the band;
+- enough width to support a volatility-aware stop and positive net reward-to-risk.
 
-## Stop-loss placement
+Do not count repeated taps without a meaningful move away as separate strong touches. Treat rapid retesting, shrinking rebounds, or one-sided pressure as breakout risk.
 
-Correct stops are central to range trading because the whole edge depends on the boundary holding. Apply these principles:
+If the boundaries are sloped, expanding, or converging, identify the structure as a channel, broadening formation, or compression rather than forcing a horizontal range.
 
-- **Place stops outside the range.** The stop goes beyond the support (for longs) or resistance (for shorts) that defines the range, so a genuine breakout takes you out cleanly. A stop inside the range gets hit by normal oscillation.
-- **Leave a buffer for false breakouts.** Price often pokes just past a boundary and snaps back. The stop distance should account for this — too tight and you're whipsawed out of good trades.
-- **Size the buffer with volatility.** Use a volatility measure such as ATR (Average True Range) to scale the stop: wider stops in more volatile conditions, tighter stops when volatility is low. ATR gives an objective read on the asset's typical fluctuation.
-- **Anchor to structure.** Place the stop just beyond a significant support/resistance level rather than at an arbitrary distance.
-- **Respect the risk-reward ratio.** The stop distance, combined with the target (opposite boundary), must keep the trade's risk-reward favorable. If a volatility-appropriate stop makes the risk-reward unattractive, the trade isn't worth taking.
-- **Stay adaptive.** Boundaries and volatility evolve. Revisit stops as new support/resistance forms or as volatility shifts within the range.
+### 5. Evaluate price location and closed-bar confirmation
 
-## Output format
+Normalize price location inside the band:
 
-When generating a range-trading analysis, present it in this structure:
+`location = (price - support_center) / (resistance_center - support_center)`
 
+Use the final close for decision-making.
+
+- Near support: consider a long only when price enters the support zone and a finalized candle rejects or reclaims it.
+- Near resistance: consider an exit or short only when price enters the resistance zone and a finalized candle rejects it.
+- Mid-range: return **No trade — poor location** unless the user explicitly requests management of an existing position.
+
+Require location plus closed-bar rejection and at least one supporting confirmation, such as:
+
+- RSI turning away from a local extreme or showing divergence;
+- Bollinger-band rejection with re-entry inside the band;
+- reversal-body or wick structure relative to ATR;
+- declining directional pressure;
+- meaningful venue volume, when reliable.
+
+Do not require RSI to reach exactly 30 or 70. Do not use volume when its source is not meaningful for the instrument.
+
+### 6. Build the trade plan and test economics
+
+For a valid setup, specify:
+
+- direction and whether it means entry, short entry, or exit of an existing position;
+- trigger condition on a finalized candle;
+- entry zone, rounded only to a known tick size;
+- structural invalidation level;
+- stop beyond the outer edge of the boundary zone plus a volatility and execution buffer;
+- first target near the range midpoint when useful;
+- final target before the opposite boundary zone;
+- gross and net reward-to-risk;
+- assumptions for spread, fees, slippage, funding, and borrow;
+- optional position size only when risk budget and contract details are known.
+
+Reject the trade when net reward is non-positive or net reward-to-risk is below the user threshold. Use 1.5 as a default minimum only when the user has not supplied one.
+
+### 7. Assess breakout and failure risk
+
+Evaluate:
+
+- finalized closes outside the outer zone;
+- distance of the close beyond the boundary in ATR terms;
+- ADX and moving-average slope acceleration;
+- ATR or Bollinger-bandwidth expansion;
+- reliable volume expansion;
+- repeated pressure tests and shrinking bounce amplitude;
+- scheduled event risk, only when a trustworthy calendar is available.
+
+Classify breakout risk as **Low**, **Moderate**, **High**, or **Confirmed breakout**. Do not fade a confirmed breakout. Treat a close outside followed by a finalized close back inside as a possible failed breakout, but require a new re-entry confirmation before considering a trade.
+
+### 8. Return the result
+
+Use the exact section order below. Keep the verdict concise, show the evidence, and make missing assumptions explicit.
+
+```markdown
+## Range-trading assessment — [ASSET] | [VENUE] | [TIMEFRAME]
+**As of:** [analysis time]  
+**Last finalized candle:** [timestamp]  
+**Verdict:** [Confirmed setup / Conditional setup / No trade / Insufficient data]  
+**Setup quality:** [High / Medium / Low / Not assessable]
+
+### Data quality
+- Source/input: [source]
+- Finalized bars used: [N]
+- Missing or uncertain inputs: [items or none]
+
+### Regime
+- ADX: [value and direction]
+- MA slope: [normalized value and interpretation]
+- Efficiency/structure: [value and interpretation]
+- Volatility state: [stable / contracting / expanding]
+- Conclusion: [range-like / mixed / trending]
+
+### Range
+- Support zone: [low–high] ([N] independent rejection events)
+- Resistance zone: [low–high] ([N] independent rejection events)
+- Width: [absolute] | [%] | [ATR multiple]
+- Containment and alternation: [evidence]
+
+### Current setup
+- Final-close location: [near support / mid-range / near resistance / outside]
+- Closed-bar confirmation: [evidence or missing condition]
+- Allowed action: [long / exit long / short / wait]
+
+### Trade plan
+- Trigger: [finalized-candle condition]
+- Entry zone: [range]
+- Invalidation: [condition]
+- Stop: [price and buffer rationale]
+- Target 1: [price or not used]
+- Target 2: [price]
+- Gross R:R: [ratio]
+- Net R:R: [ratio or not computable]
+- Cost assumptions: [details]
+- Position size: [quantity and risk, formula only, or not computable]
+
+### Breakout risk
+- Classification: [Low / Moderate / High / Confirmed breakout]
+- Evidence: [reasons]
+
+### Assumptions and limitations
+[Short factual caveats. State that this is technical analysis, not a guarantee.]
 ```
-## Range Trading Analysis — [ASSET] [timeframe]
 
-**Trend filter:** [Range-bound / Trending] — [ADX value, MA slope, structure notes]
-→ [If trending: state range trading is NOT appropriate and stop here.]
+If the verdict is **No trade** or **Insufficient data**, omit fabricated entry levels and state the next objective condition that would justify reassessment.
 
-**Range boundaries:**
-- Support: [price] ([N] touches)
-- Resistance: [price] ([N] touches)
-- Range width: [absolute + % terms]
+## Quality controls
 
-**Current setup:**
-- Price location in range: [near support / mid / near resistance]
-- Oscillator confirmation: [RSI value, Bollinger position, etc.]
+Before responding, verify all of the following:
 
-**Signal:** [Long near support / Short near resistance / No trade — wait]
-- Entry zone: [price range]
-- Target: [opposite boundary]
-- Stop-loss: [price, outside the range, with ATR-based rationale]
-- Risk-reward: [ratio]
-
-**Breakout risk:** [Low / Elevated] — [reasons]
-
-**Notes:** [caveats, choppiness warning, market-condition reminders]
-```
-
-## Key reminders
-
-- **No trade is a valid output.** If the market is trending, the range is unconfirmed (too few touches), the range is too narrow, or breakout risk is high, the correct recommendation is to stand aside. Don't manufacture a signal where conditions don't support one.
-- **Limited profit, capped by the range.** Range trading deliberately targets small, repeatable oscillations. Don't chase big moves with it — if you want to capture a breakout, that's a different strategy.
-- **Choppy markets cause false signals.** Range-bound conditions can produce erratic whipsaws inside the boundaries. Acknowledge this risk rather than presenting signals as certainties.
-- **This is analysis, not financial advice.** Present levels, signals, and risks as structured technical analysis for the user to act on at their own discretion. Don't guarantee profitability.
+- Every decision value comes from finalized data available by `analysis_time`.
+- The range was defined without future bars or the prospective signal bar influencing prior boundaries.
+- Support and resistance are zones with independent tests, not arbitrary single prices.
+- Regime classification uses more than one indicator.
+- The action respects long-only or shorting constraints.
+- Stop, targets, costs, and reward-to-risk use the same entry assumption.
+- The stop was not placed inside normal range noise and was not widened after entry.
+- The output distinguishes confirmed evidence from assumptions and live context.

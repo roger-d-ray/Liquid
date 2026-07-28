@@ -1,0 +1,10 @@
+interface:
+  display_name: Range Trading Analyst
+  short_description: Closed-bar range detection, mean-reversion setups, and risk-aware trade planning
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
