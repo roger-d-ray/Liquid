@@ -92,6 +92,14 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
      `minimum_notional` fornito dal connector si applica separatamente.
    - Registra ogni esito in `logs/execution_resolution.jsonl`. Risk manager,
      sizing e Telegram riapplicano il gate sul `MarketContext`.
+   - ⚡ **Non eseguire resolve → validate → size → invio come tool-call
+     separate:** il timestamp del book viene ri-controllato contro il gate 30s in
+     tutti e quattro i punti, e il wall-clock tra un passo e l'altro lo fa andare
+     stale. **Metodo di default:** subito dopo un `show_orderbook` fresco, passa i
+     tre payload MCP + il proposal + lo snapshot a `propose_pipeline.py`, che fa
+     l'intera catena in UN processo (sotto-secondo) — vedi sezione "Pipeline unica
+     (STEP 2→7)". Gli step 3–7 qui sotto restano la descrizione concettuale di ciò
+     che la pipeline esegue.
    - Dopo l'approvazione Telegram richiama almeno `analyze_market` e
      `show_orderbook`, ricrea il contesto e rifai sizing/gate: non eseguire con la
      quotazione pre-approvazione.
@@ -104,6 +112,60 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
    - `get_portfolio()` → `portfolio.from_coinvest(gp)` → `portfolio.save_portfolio_state(snap)`.
    - **Allega SEMPRE il riepilogo portafoglio al messaggio Telegram di fine run** (quello di trade eseguito / rifiutato / "nessun setup"). Usa `portfolio.build_portfolio_message()` o una riga compatta (equity, disponibile, margine, N posizioni). Questo è il modello **push** che sostituisce il poller `/portfolio` (vedi sezione dedicata): niente processo persistente, portafoglio sempre fresco in chat.
 8. MAX 1 proposta per run (solo la migliore per confidence)
+
+## Pipeline unica (STEP 2→7) — `propose_pipeline.py` (anti-stale)
+
+⚡ **Perché.** Il gate di freschezza (`EXECUTION_DATA_MAX_AGE_SECONDS`, default 30s)
+ri-controlla il timestamp del book in QUATTRO punti: resolve, risk_manager, sizing
+e invio Telegram. Se l'agente li esegue come tool-call separate, il tempo che
+passa tra `show_orderbook` e l'invio supera i 30s → il contesto va stale → si
+rifà il book → il ciclo si ripete. `propose_pipeline.py` fa **resolve → validate
+→ size → notify in UN solo processo Python** (sotto-secondo), così i quattro
+controlli cadono nella stessa frazione di secondo e passano insieme. **Il gate NON
+è indebolito**: resta 30s; è solo la latenza tra i passi a sparire.
+
+**Quando.** È il metodo di default dello STEP 2 dopo aver scelto il setup migliore
+e ottenuto un `show_orderbook` fresco. Sostituisce lo "script combinato" che prima
+veniva improvvisato ad ogni run.
+
+**Come.** Assembla in-contesto un unico JSON di input e lancia:
+
+    python propose_pipeline.py --input run_input.json --result-file run_result.json
+
+Contratto di input (chiavi principali):
+- `proposal`: il proposal completo delle skill (strategy, asset, side, timeframe,
+  entry, tp, sl, leverage, risk_pct, confidence, signal_price, motivation + gli
+  indicatori richiesti dal validator: adx/rsi/ema*/atr/macd_histogram/volume_ratio/
+  support/resistance…).
+- `coinvest`: i tre payload MCP grezzi `{search_markets, analyze_market,
+  show_orderbook}` (l'adapter prova l'identità: `analyze_market.symbol` =
+  `ticker.coin` = `book.coin`).
+- `venues`: `{signal_venue, derivatives_venue, execution_venue}` (indipendenti).
+- `received_at` (opz.): ISO della ricezione locale del book.
+- `snapshot` (opz.): `{total_equity, available_balance, positions}`; se assente
+  legge `data/portfolio_state.json` (che devi aver aggiornato con
+  `get_portfolio()` → `portfolio.from_coinvest` → `save_portfolio_state`).
+
+La pipeline scrive il risultato su `--result-file` (autorevole) e su stdout come
+ultima riga `RESULT_JSON: {…}`. **Leggi il result-file, non l'exit di eventuali
+wrapper.** Exit code:
+- **0** = accettato su Telegram → procedi allo STEP 5 (esecuzione).
+- **10** = rifiutato / timeout Telegram → logga e passa a STEP 7.
+- **15** = quotazione stale proprio all'invio (run eccezionalmente lento) → rifai
+  `show_orderbook` e rilancia la pipeline.
+- **20** = scartato in sizing (floor margine/rischio): la pipeline ha già inviato
+  il messaggio discard. Logga `{"result":"discarded_margin", ...}` e passa a STEP 7.
+- **30** = rifiutato dal risk manager → logga e passa a STEP 7.
+- **40** = non risolto (adapter/resolve: blocked/unsupported) → NESSUN invio, no-trade.
+- **2** = errore d'uso/input.
+
+⚠️ **Confine di sicurezza.** La pipeline si ferma all'invio + attesa risposta.
+**NON apre l'ordine.** Con exit 0 procedi allo STEP 5 come sempre: `python
+trading_mode.py --require-live`, ri-verifica che Co-Invest non sia in paper,
+**ri-risolvi una quotazione fresca** (`analyze_market` + `show_orderbook`,
+`build_execution_order`) e solo allora chiama `execute_order()`. Le azioni che
+toccano il conto restano nell'agente; la conferma Telegram è l'unica autorizzazione.
+Usa `--dry-run` per un giro senza invio (test/anteprima messaggio).
 
 ## Dettaglio STEP 5 — Esecuzione e notifica post-trade
 
