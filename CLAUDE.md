@@ -52,7 +52,17 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
      quote_volume ed estimated_quote_volume. Una stima non vale come quote
      volume esatto; controlla sempre source, aggregation_method, completeness
      e quality_flags.
-2. Leggi market_data.json e applica le 3 skill
+2. Esegui `python market_summary.py` e applica le 3 skill al JSON emesso su
+   stdout. Questo e' l'unico input per l'analisi: non esplorare
+   `data/market_data.json` con Python inline e non assumere strutture annidate
+   diverse da quelle esposte dal summary.
+   - `assets[asset].signal_timeframes[tf]` contiene
+     `recent_closed_bars` e `indicators` per 15m/1h.
+   - `assets[asset].context_timeframes[tf]` contiene 4h/1d solo quando il
+     contesto e' disponibile; eventuali assenze sono riportate in `warnings` e
+     non invalidano da sole i dati 15m/1h.
+   - Se `market_summary.py` fallisce, considera i dati non validi, notifica
+     Telegram e fermati.
    - Mantieni espliciti `live.signal_venue` e `live.derivatives_venue`: una fonte
      dati non identifica mai venue o contratto di esecuzione.
    - **Prima di creare una proposta azionabile**, chiama in quest'ordine i tool
