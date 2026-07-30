@@ -2,5 +2,6 @@
 data/
 __pycache__/
 *.pyc
-.DS_Storerun_input.json
+.DS_Store
+run_input.json
 run_result.json
