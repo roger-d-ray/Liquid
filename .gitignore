@@ -3,3 +3,11 @@ data/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Transient per-run pipeline artifacts (regenerated every run)
+run_input.json
+run_result.json
+run_base.json
+pipeline_stdout.log
+inject_and_run.py
+logs/execution_resolution.jsonl
