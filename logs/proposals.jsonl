@@ -34,3 +34,4 @@
 {"timestamp": "2026-08-06T13:17:56+00:00", "result": "discarded_margin", "asset": "BTC", "strategy": "momentum-trading", "signal": "short", "confidence": 0.58, "reason": "la size massima consentita rischierebbe 1.83% dell'equity, sotto il minimo 2.25% (retention 61.0%)", "sizing": {"target_risk_pct": 0.03, "risk_pct": 0.0183, "risk_retention": 0.6101, "minimum_risk_pct": 0.0225, "margin_budget": 48.41, "leverage_ceiling": 20.0}}
 {"timestamp": "2026-08-06T15:17:35.737023+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-06T17:09:22.610011+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-06T19:07:25.120159+00:00", "result": "no_setup"}
