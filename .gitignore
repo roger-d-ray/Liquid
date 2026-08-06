@@ -3,3 +3,6 @@ data/
 __pycache__/
 *.pyc
 .DS_Store
+# transient per-run pipeline scratch
+run_input.json
+run_result.json
