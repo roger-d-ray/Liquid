@@ -1,0 +1,1 @@
+{"stage": "validate", "ok": false, "rejection_reason": "Range width is 0.34% — too narrow (< 1.5%). Not enough room to cover costs and a proper stop.", "warnings": ["Risk-reward 1.55 is below ideal 1.8. Consider waiting for a better setup.", "ADX 24.8 is approaching trend territory (25.0). Breakout risk increasing — watch closely."]}
