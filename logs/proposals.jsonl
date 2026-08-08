@@ -52,3 +52,4 @@
 {"timestamp": "2026-08-08T07:45:30.641233+00:00", "result": "rejected_telegram", "asset": "SOL", "strategy": "momentum-trading", "signal": "long", "timeframe": "1h", "confidence": 0.62, "entry": 74.69, "target": 75.35, "stop_loss": 74.35, "leverage": 10, "note": "Timeout Telegram (nessuna risposta 30min) — nessun trade"}
 {"timestamp": "2026-08-08T09:07:51.529681+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-08T11:09:48Z", "result": "no_setup"}
+{"timestamp": "2026-08-08T13:08:59.240823+00:00", "result": "no_setup"}
