@@ -65,3 +65,4 @@
 {"timestamp": "2026-08-09T07:15:39+00:00", "result": "rejected_by_risk_manager", "asset": "SOL", "strategy": "momentum-trading", "signal": "long", "timeframe": "1h", "confidence": 0.68, "rejection_reason": "Risk-reward 1.17 < minimum 1.2. Trade not worth taking.", "signal_price": 76.3, "execution_ask": 76.446}
 {"timestamp":"2026-08-09T09:08:37+00:00","result":"no_setup"}
 {"timestamp": "2026-08-09T11:10:32.779231+00:00", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "reason": "no setup >= 0.55 confidence; thin/choppy market, momentum fading"}
+{"timestamp": "2026-08-09T13:20:24+00:00", "result": "no_trade_unresolved", "stage": "resolve", "resolution_status": "blocked", "asset": "SOL", "strategy": "momentum-trading", "signal": "long", "confidence": 0.58, "signal_price": 76.5, "reason": "execution-price dislocation is 35.42 bps (max 25.00 bps)"}
