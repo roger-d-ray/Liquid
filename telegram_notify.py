@@ -235,7 +235,20 @@ def _sizing_lines(proposal: dict) -> list[str]:
 
 
 def _markdown_text(value) -> str:
-    return str(value).replace("\\", "\\\\").replace("_", "\\_").replace("*", "\\*")
+    # Messages are sent with legacy parse_mode="Markdown", which does NOT support
+    # backslash escaping (only MarkdownV2 does). Backslash-escaping here produced
+    # a literal "\" plus a still-active "_"/"*" entity delimiter — e.g.
+    # "binance_futures" became "binance\_futures", opening an italic entity that
+    # collided with the motivation italics and triggered a Telegram 400
+    # "can't parse entities". For legacy Markdown the only safe move is to
+    # neutralize the entity characters by replacing them with harmless lookalikes.
+    return (
+        str(value)
+        .replace("_", "-")
+        .replace("*", "-")
+        .replace("`", "'")
+        .replace("[", "(")
+    )
 
 
 def _execution_lines(proposal: dict) -> list[str]:
@@ -306,7 +319,11 @@ def format_proposal(proposal: dict) -> str:
         f"*Risk/Reward:* {rr_str}",
     ]
     if motivation:
-        lines += ["", f"_{motivation}_"]
+        # Motivation is free text wrapped in italic "_..._". A stray "_"/"*"/"`"
+        # inside it (e.g. "vol_ratio") would open/close a spurious entity and
+        # break legacy Markdown parsing, so neutralize the entity characters.
+        safe_motivation = _markdown_text(motivation)
+        lines += ["", f"_{safe_motivation}_"]
     lines += [
         "",
         "Rispondi *accetta* / *ok* / *yes* per approvare.",
