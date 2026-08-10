@@ -72,3 +72,4 @@
 {"timestamp": "2026-08-09T19:15:53+00:00", "result": "discarded_margin", "asset": "BTC", "signal": "long", "strategy": "momentum-trading", "timeframe": "1h", "confidence": 0.62, "reason": "Trade scartato: la size massima consentita rischierebbe 0.47% dell equity, sotto il minimo 2.25% (retention 15.6%, richiesto almeno 75%). Budget margine ~$23 vincolato dalla posizione SOL aperta (cap margine totale 60%).", "sizing": {"target_risk_pct": 0.03, "risk_pct": 0.0047, "risk_retention": 0.156, "minimum_risk_pct": 0.0225, "margin_budget": 23.11, "leverage_ceiling": 20.0}}
 {"timestamp": "2026-08-09T21:09:32.949985Z", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "reason": "nessun setup >= 0.55 confidence su 15m/1h"}
 {"timestamp": "2026-08-09T23:11:29.705304+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-10T07:09:40.023754+00:00", "result": "no_setup"}
