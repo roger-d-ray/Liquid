@@ -6,4 +6,4 @@ __pycache__/
 
 # Per-run scratch files for propose_pipeline.py (regenerated each run)
 run_input.json
-run_result.json
+run_result.jsonpipeline_stdout.log
