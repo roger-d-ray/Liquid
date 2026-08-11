@@ -3,3 +3,7 @@ data/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Per-run scratch files for propose_pipeline.py (regenerated each run)
+run_input.json
+run_result.json
