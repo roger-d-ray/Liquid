@@ -106,3 +106,4 @@
 {"timestamp": "2026-08-12T13:48:23+00:00", "result": "rejected_telegram", "asset": "ETH", "strategy": "momentum-trading", "side": "long", "confidence": 0.61, "timeframe": "15m", "reason": "telegram_timeout_no_response"}
 {"timestamp": "2026-08-12T15:18:09.494448+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-12T17:09:00.328382+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-12T19:07:03.108642+00:00", "result": "no_setup"}
