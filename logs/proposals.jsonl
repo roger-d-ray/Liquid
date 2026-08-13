@@ -115,3 +115,4 @@
 {"timestamp": "2026-08-13T07:45:31.327504+00:00", "result": "rejected_telegram", "asset": "ETH", "strategy": "momentum-trading", "signal": "long", "confidence": 0.63, "note": "Proposta ETH momentum-long inviata su Telegram; timeout 30 min senza risposta. Nessun trade."}
 {"timestamp": "2026-08-13T09:10:27.943203+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-13T11:16:34.161284+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-13T13:13:27.843441Z", "result": "no_setup"}
