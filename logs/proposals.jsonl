@@ -116,3 +116,4 @@
 {"timestamp": "2026-08-13T09:10:27.943203+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-13T11:16:34.161284+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-13T13:13:27.843441Z", "result": "no_setup"}
+{"timestamp": "2026-08-13T15:31:23.571160+00:00", "result": "no_trade_unresolved", "asset": "SOL", "strategy": "momentum-trading", "signal": "long", "timeframe": "15m", "confidence": 0.62, "signal_price": 76.21, "stage": "resolve", "resolution_status": "blocked", "reason": "execution-price dislocation is 25.32 bps (max 25.00 bps)"}
