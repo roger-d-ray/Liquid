@@ -147,3 +147,4 @@
 {"timestamp": "2026-08-16T17:13:47.145857+00:00", "result": "discarded_margin", "asset": "BTC", "signal": "long", "strategy": "momentum-trading", "timeframe": "15m", "confidence": 0.58, "reason": "Trade scartato: la size massima consentita rischierebbe 1.20% equity, sotto il minimo 2.25% (retention 40.1%, richiesto >=75%). Stop stretto (95 pts) non sizeabile al risk floor su equity 111.71 senza allargare artificialmente lo stop.", "sizing": {"target_risk_pct": 0.03, "risk_pct": 0.012, "risk_retention": 0.4008, "minimum_risk_pct": 0.0225, "margin_budget": 44.68, "leverage_ceiling": 20.0}}
 {"timestamp": "2026-08-16T19:07:22.741525+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-16T21:07:01Z", "result": "no_setup"}
+{"timestamp": "2026-08-16T23:11:11.100658+00:00", "result": "no_setup"}
