@@ -142,3 +142,4 @@
 {"timestamp": "2026-08-16T09:08:26.819000+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-16T11:10:47.058903+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-16T13:09:20.643453+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-16T15:09:08.743114+00:00", "result": "no_setup", "detail": "BTC~0.52 (range-fade, no rejection, thin vol), ETH~0.48 (RR<1.8, momentum up), SOL no-trade (RR~1.0<1.2). Flat low-vol session."}
