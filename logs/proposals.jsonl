@@ -150,3 +150,4 @@
 {"timestamp": "2026-08-16T23:11:11.100658+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-17T07:23:34.380623+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-17T09:13:26.783420+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-17T11:11:02.075893+00:00", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "note": "all pressing 20-bar highs, no confirmed breakout, overbought 15m stoch, weak 15m volume, structural stop R/R insufficient"}
