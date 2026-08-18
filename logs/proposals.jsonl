@@ -167,3 +167,4 @@
 {"timestamp": "2026-08-18T15:27:45.654+00:00", "result": "executed", "order_id": "519080103914", "trade_id": "527704a2-29b6-45e4-9089-c33e0baa866d", "exchange": "hyperliquid", "symbol": "BTC-PERP", "instrument_id": "BTC", "strategy": "momentum-trading", "asset": "BTC", "side": "long", "timeframe": "15m", "entry_px": 64756.0, "size_usd": 871.23, "size_coin": 0.01345, "leverage": 20.0, "margin_usd": 42.874367, "risk_pct": 0.04, "risk_usd": 4.47, "tp": 65270.0, "sl": 64400.0, "liquidation_px": 62354.749084749, "rr_at_fill": 1.44, "confidence": 0.66, "equity_after": 111.03, "available_after": 68.16, "telegram": "accepted"}
 {"timestamp": "2026-08-18T17:07:37.107951+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-18T21:08:14Z", "result": "no_setup"}
+{"timestamp": "2026-08-18T23:07:03.526839+00:00", "result": "no_setup"}
