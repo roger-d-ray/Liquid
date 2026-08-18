@@ -161,3 +161,4 @@
 {"timestamp": "2026-08-18T07:09:47.689503+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-18T09:07:16.355240Z", "result": "no_setup"}
 {"timestamp":"2026-08-18T11:13:21Z","result":"no_setup"}
+{"timestamp": "2026-08-18T13:06:27.248233+00:00", "result": "blocked_coinvest_unavailable", "detail": "Co-Invest MCP not authorized in session; live status unverifiable; no account actions taken"}
