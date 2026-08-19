@@ -169,3 +169,4 @@
 {"timestamp": "2026-08-18T21:08:14Z", "result": "no_setup"}
 {"timestamp": "2026-08-18T23:07:03.526839+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-19T07:07:21Z", "result": "no_setup"}
+{"timestamp": "2026-08-19T09:06:39Z", "result": "blocked_preflight", "reason": "coinvest_mcp_unreachable", "detail": "Co-Invest connector unauthorized in non-interactive session; cannot verify paper_trading_status/live; no account action taken"}
