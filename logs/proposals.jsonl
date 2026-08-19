@@ -174,3 +174,4 @@
 {"timestamp":"2026-08-19T13:08:47Z","result":"blocked_preflight","reason":"coinvest_mcp_unavailable"}
 {"timestamp": "2026-08-19T15:12:24.714611+00:00", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "reason": "climactic_overbought_extended_no_coherent_tight_stop"}
 {"timestamp":"2026-08-19T17:07:09Z","result":"blocked_coinvest_unavailable","reason":"Co-Invest MCP tools not loadable in non-interactive scheduled session; cannot verify paper/live or touch account","account_actions":false}
+{"timestamp": "2026-08-19T19:07:27.545938Z", "result": "no_setup"}
