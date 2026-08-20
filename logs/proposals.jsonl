@@ -177,3 +177,4 @@
 {"timestamp": "2026-08-19T19:07:27.545938Z", "result": "no_setup"}
 {"timestamp": "2026-08-19T21:08:59.333744+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-19T23:06:12Z", "result": "blocked_coinvest_unavailable", "reason": "Co-Invest MCP connector requires auth / not reachable in non-interactive scheduled session; cannot verify paper_trading_status(), no account actions", "account_actions": false}
+{"timestamp": "2026-08-20T07:11:46Z", "result": "no_setup", "analyzed": ["BTC", "ETH", "SOL"], "confidence_scores": {"BTC": 0.45, "ETH": 0.4, "SOL": 0.52}, "reason": "all overbought/extended into resistance; best (SOL) 0.52 < 0.55"}
