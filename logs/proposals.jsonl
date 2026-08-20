@@ -180,3 +180,4 @@
 {"timestamp": "2026-08-20T07:11:46Z", "result": "no_setup", "analyzed": ["BTC", "ETH", "SOL"], "confidence_scores": {"BTC": 0.45, "ETH": 0.4, "SOL": 0.52}, "reason": "all overbought/extended into resistance; best (SOL) 0.52 < 0.55"}
 {"timestamp": "2026-08-20T09:08:23Z", "result": "no_setup"}
 {"timestamp": "2026-08-20T11:12:41.301838Z", "result": "no_setup"}
+{"timestamp": "2026-08-20T13:08:56.607492+00:00", "result": "no_setup"}
