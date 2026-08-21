@@ -187,3 +187,4 @@
 {"timestamp": "2026-08-20T21:07:19.180059+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-20T23:09:14Z", "result": "no_setup"}
 {"timestamp": "2026-08-21T07:16:34.519563+00:00", "result": "no_trade_unresolved", "asset": "ETH", "strategy": "momentum_trading", "side": "long", "timeframe": "15m", "confidence": 0.6, "signal_price": 2378.43, "stage": "resolve", "resolution_status": "blocked", "reason": "execution price dislocated beyond gate: signal 2378.43 -> ask ~2388.4 (~42 bps > 25 bps max); breakout ran away from entry"}
+{"timestamp": "2026-08-21T09:06:42Z", "result": "no_setup"}
