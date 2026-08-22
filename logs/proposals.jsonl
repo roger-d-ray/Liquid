@@ -195,3 +195,4 @@
 {"timestamp": "2026-08-21T19:11:13+00:00", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "reason": "no setup >= 0.55; market overextended (4h RSI 89-94), 1h MACD histograms negative, 1h volume below average; range longs fail RSI<=50 gate, 15m momentum longs fail RSI>=55/weak ADX"}
 {"timestamp": "2026-08-21T21:10:10.528971Z", "result": "no_setup"}
 {"timestamp": "2026-08-21T23:07:36.221093+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-22T07:07:54.083295+00:00", "result": "no_setup"}
