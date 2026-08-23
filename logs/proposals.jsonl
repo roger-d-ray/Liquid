@@ -209,3 +209,4 @@
 {"timestamp": "2026-08-23T11:07:16.958008+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-23T13:08:57.483277+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-23T15:07:28Z", "result": "no_setup"}
+{"timestamp": "2026-08-23T17:11:58.616710+00:00", "result": "no_trade_unresolved", "asset": "ETH", "signal": "long", "timeframe": "1h", "confidence": 0.6, "stage": "resolve", "resolution_status": "blocked", "reasons": ["execution data is stale (85.6s > 30.0s)", "signal-vs-execution dislocation ~41 bps (2442.38 -> 2452.5) beyond 25 bps"]}
