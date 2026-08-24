@@ -218,3 +218,4 @@
 {"timestamp": "2026-08-24T11:10:39.506800+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-24T13:22:24.755670+00:00", "result": "no_trade_unresolved", "asset": "ETH", "strategy": "momentum-trading", "signal": "long", "resolution_status": "blocked", "reasons": ["execution data stale 49.4s>30s", "dislocation ~45bps>25bps (signal 2507.3 -> ask 2518.6)"], "confidence": 0.68}
 {"timestamp": "2026-08-24T17:08:38Z", "result": "no_setup"}
+{"timestamp": "2026-08-24T19:06:56Z", "result": "no_setup"}
