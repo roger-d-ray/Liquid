@@ -213,3 +213,4 @@
 {"timestamp": "2026-08-23T19:06:26.428906+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-23T21:06:57Z", "result": "no_setup"}
 {"timestamp": "2026-08-23T23:06:48.039484+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-24T07:08:58Z", "result": "no_setup", "assets_evaluated": ["BTC", "ETH", "SOL"], "notes": "BTC weak volume+stoch estremo; ETH no breakout 2462.98 con stoch 82; SOL volume 0.17x anemico"}
