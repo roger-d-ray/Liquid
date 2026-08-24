@@ -216,3 +216,4 @@
 {"timestamp": "2026-08-24T07:08:58Z", "result": "no_setup", "assets_evaluated": ["BTC", "ETH", "SOL"], "notes": "BTC weak volume+stoch estremo; ETH no breakout 2462.98 con stoch 82; SOL volume 0.17x anemico"}
 {"timestamp": "2026-08-24T09:07:35Z", "result": "no_setup"}
 {"timestamp": "2026-08-24T11:10:39.506800+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-24T13:22:24.755670+00:00", "result": "no_trade_unresolved", "asset": "ETH", "strategy": "momentum-trading", "signal": "long", "resolution_status": "blocked", "reasons": ["execution data stale 49.4s>30s", "dislocation ~45bps>25bps (signal 2507.3 -> ask 2518.6)"], "confidence": 0.68}
