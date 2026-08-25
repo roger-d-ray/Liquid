@@ -226,3 +226,4 @@
 {"timestamp": "2026-08-25T09:09:27.416510+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-25T11:15:31.782607+00:00", "result": "no_trade_unresolved", "asset": "SOL", "strategy": "momentum-trading", "signal": "long", "timeframe": "1h", "confidence": 0.62, "signal_price": 99.59, "reason": "execution gate blocked: SOL fell to ~98.95 Liquid ask (dislocation ~64bps > 25bps) and broke 15m support 99.1 during the run; pipeline exit 40 (blocked). Long thesis invalidated.", "other_assets": "BTC/ETH no setup >=0.55"}
 {"timestamp":"2026-08-25T13:09:44+00:00","result":"no_setup","assets_analyzed":["BTC","ETH","SOL"],"note":"no setup >=0.55; SOL pullback watch (trigger unconfirmed), BTC/ETH chop"}
+{"timestamp": "2026-08-25T15:08:16.693369+00:00", "result": "no_setup"}
