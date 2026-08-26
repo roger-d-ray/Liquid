@@ -239,3 +239,4 @@
 {"timestamp": "2026-08-26T17:07:32.607410+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-26T19:07:40.404628+00:00", "result": "no_setup"}
 {"timestamp":"2026-08-26T21:09:36.398490+00:00","result":"no_setup","assets_analyzed":["BTC","ETH","SOL"],"reason":"low_volume_no_breakout_below_0.55"}
+{"timestamp": "2026-08-26T23:09:14Z", "result": "no_setup"}
