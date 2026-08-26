@@ -231,3 +231,4 @@
 {"timestamp":"2026-08-25T19:08:18.601718+00:00","result":"no_setup"}
 {"timestamp": "2026-08-25T21:11:07.425707+00:00", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "reason": "intraday sell-off; momentum shorts overextended (>2.5 ATR)/chase, support breakdown non-fadeable, counter macro-uptrend; nothing >=0.55"}
 {"timestamp": "2026-08-25T23:07:35.167621+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-26T07:09:55.426990+00:00", "result": "no_setup"}
