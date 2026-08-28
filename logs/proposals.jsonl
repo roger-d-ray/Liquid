@@ -255,3 +255,4 @@
 {"timestamp": "2026-08-27T23:18:09.977059+00:00", "result": "executed", "strategy": "momentum-trading", "asset": "SOL", "side": "long", "timeframe": "15m", "entry": 109.1, "tp": 110.6, "sl": 108.15, "leverage": 10, "size_usd": 177.68, "margin_usd": 17.73, "risk_usd": 1.48, "risk_pct": 0.03, "confidence": 0.6, "rr_ratio": 1.58, "order_id": "528928620495", "trade_id": "106972e6-1c65-4571-bad2-6528795b1a9d", "exchange": "hyperliquid", "instrument_id": "SOL"}
 {"timestamp": "2026-08-28T07:08:36.290223+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-28T09:09:10.770728+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-28T11:09:11.238909Z", "result": "no_setup"}
