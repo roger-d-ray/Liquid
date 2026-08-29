@@ -264,3 +264,4 @@
 {"timestamp": "2026-08-28T23:08:05.360940+00:00", "result": "no_trade_flatten_window", "reason": "23:07 UTC inside end-of-day flatten window (FLATTEN_HOUR_UTC=23); only counter-trend bounce-fade shorts available on BTC/ETH/SOL \u2014 a new entry now would be an overnight hold, forbidden by intraday profile", "assets_scanned": ["BTC", "ETH", "SOL"], "note": "1h trend bearish across all three; 15m stochastic overbought at resistance (BTC 98.7, ETH 87.5, SOL 91.4)"}
 {"timestamp": "2026-08-29T07:07:03.556301+00:00", "result": "no_setup"}
 {"timestamp": "2026-08-29T09:09:26.523909+00:00", "result": "no_setup"}
+{"timestamp": "2026-08-29T11:06:47.852637Z", "result": "no_setup"}
