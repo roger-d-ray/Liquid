@@ -8,3 +8,4 @@ __pycache__/
 run_input.json
 run_result.json
 pipeline_stdout.log
+pipeline_bg.log
