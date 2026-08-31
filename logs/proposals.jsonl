@@ -291,3 +291,4 @@
 {"timestamp": "2026-08-30T21:43:29.826393+00:00", "result": "rejected_telegram", "strategy": "momentum-trading", "asset": "ETH", "signal": "long", "timeframe": "1h", "entry": 2475.7, "target": 2497.0, "stop_loss": 2464.0, "leverage": 16.0, "risk_pct": 0.03, "rr_ratio": 1.82, "confidence": 0.58, "size_usd": 290.16, "margin_usd": 18.14, "risk_usd": 1.37, "equity": 45.71, "note": "Telegram timeout (no response in 30 min); proposal cancelled, no execution."}
 {"timestamp": "2026-08-30T23:06:46Z", "result": "no_setup"}
 {"timestamp": "2026-08-31T07:16:57Z", "result": "no_setup"}
+{"timestamp": "2026-08-31T09:06:40.578266+00:00", "result": "no_setup"}
