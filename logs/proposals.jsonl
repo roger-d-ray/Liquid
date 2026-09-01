@@ -301,3 +301,4 @@
 {"timestamp": "2026-08-31T19:20:46.423357+00:00", "result": "no_trade_unresolved", "asset": "SOL", "strategy": "momentum-trading", "signal": "long", "timeframe": "15m", "confidence": 0.6, "signal_price": 104.51, "reason": "Execution dislocation ~44 bps > 25 bps (ask 104.05 vs signal 104.51); SOL sold off from 104.52 to 104.05 in minutes, momentum-long thesis invalidated. Proposal sent to Telegram then withdrawn; no execution."}
 {"timestamp": "2026-08-31T21:06:20.484147Z", "result": "no_setup"}
 {"timestamp": "2026-08-31T23:10:22.906486+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-01T07:16:11.505001+00:00", "result": "no_setup"}
