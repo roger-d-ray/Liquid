@@ -9,3 +9,9 @@ run_input.json
 run_result.json
 pipeline_stdout.log
 pipeline_bg.log
+
+# Regime-detection training area: lo storico pesante e gli artefatti intermedi
+# di training restano LOCALI. In git entrano solo il modello esportato, i suoi
+# metadati e la copia di regime_features.py nella directory del bot.
+regime-training/data/
+regime-training/artifacts/
