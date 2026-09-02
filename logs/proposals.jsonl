@@ -317,3 +317,4 @@
 {"timestamp": "2026-09-02T15:13:07.608150+00:00", "result": "no_setup", "detail": "SOL only >=0.55 short (1h downtrend ADX42.6, 99.75 rejection) but post-drop to ~98.6 R/R<1.2 vs structural stop>99.75/target97.33; entry gone. BTC/ETH mid-range weak volume."}
 {"timestamp": "2026-09-02T17:08:06.736016+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-02T19:06:02Z", "result": "no_setup"}
+{"timestamp": "2026-09-02T21:07:21.766703+00:00", "result": "no_setup"}
