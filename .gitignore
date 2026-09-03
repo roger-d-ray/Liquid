@@ -9,3 +9,5 @@ run_input.json
 run_result.json
 pipeline_stdout.log
 pipeline_bg.log
+proposal.json
+launch_pipeline.py
