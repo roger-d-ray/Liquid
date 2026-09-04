@@ -350,3 +350,4 @@
 {"timestamp": "2026-09-04T17:20:35.659042+00:00", "result": "executed", "strategy": "momentum-trading", "asset": "SOL", "signal": "short", "timeframe": "1h", "order_id": "536291226766", "trade_id": "910a9613-9201-4d33-96eb-74a255728c87", "instrument_id": "SOL", "exchange": "hyperliquid", "entry_fill": 101.55, "size_usd": 157.83, "leverage": 10, "margin_usd": 15.6, "tp": 100.25, "sl": 102.35, "risk_usd": 1.34, "risk_pct": 0.03, "confidence": 0.58, "signal_price": 101.73, "execution_price": 101.59, "execution_price_type": "bid"}
 {"timestamp": "2026-09-04T19:06:39.146821+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-04T21:07:39.195990+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-04T23:09:52.152253+00:00", "result": "no_setup"}
