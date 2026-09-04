@@ -333,3 +333,4 @@
 {"timestamp": "2026-09-03T19:06:55.569160Z", "result": "no_setup"}
 {"timestamp": "2026-09-03T21:08:05.317727+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-03T23:08:47.570335+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-04T07:07:11.993949Z", "result": "aborted_infrastructure", "reason": "coinvest_mcp_unauthenticated", "detail": "Co-Invest MCP server requires OAuth authorization; non-interactive session cannot authenticate. Routine halted after trading_mode.py --require-live passed."}
