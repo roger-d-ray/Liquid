@@ -306,7 +306,15 @@ def format_proposal(proposal: dict) -> str:
         f"*Risk/Reward:* {rr_str}",
     ]
     if motivation:
-        lines += ["", f"_{motivation}_"]
+        # The motivation is free text wrapped in italic (_..._). It may contain
+        # Markdown-significant chars (e.g. "vol_ratio", "*"). Backslash-escaping
+        # does NOT help here: Telegram legacy Markdown ignores escapes INSIDE an
+        # open entity, so an inner `_`/`*` desyncs the italic pair and the whole
+        # message is rejected ("can't parse entities"). Strip the markers instead.
+        safe_motivation = str(motivation)
+        for _ch in "_*`[]":
+            safe_motivation = safe_motivation.replace(_ch, " ")
+        lines += ["", f"_{safe_motivation}_"]
     lines += [
         "",
         "Rispondi *accetta* / *ok* / *yes* per approvare.",
