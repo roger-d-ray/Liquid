@@ -63,8 +63,8 @@ def _run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
 
 def _commit_log() -> str:
     """Stage & commit the log. Returns the run timestamp used as commit message."""
-    _run(["git", "config", "user.email", "bot@liquid.trade"])
-    _run(["git", "config", "user.name", "Liquid Bot"])
+    _run(["git", "config", "user.email", "noreply@anthropic.com"])
+    _run(["git", "config", "user.name", "Claude"])
     _run(["git", "add", LOG_PATH])
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     committed = _run(["git", "commit", "-m", f"bot: run {ts}"], check=False)
