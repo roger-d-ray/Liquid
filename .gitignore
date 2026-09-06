@@ -11,3 +11,6 @@ pipeline_stdout.log
 pipeline_bg.log
 proposal.json
 launch_pipeline.py
+
+# Per-run agent scratch working dir
+scratch_run/
