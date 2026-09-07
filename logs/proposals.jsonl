@@ -379,3 +379,4 @@
 {"timestamp": "2026-09-06T21:08:56.244402+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-06T23:08:27Z", "result": "no_setup"}
 {"timestamp": "2026-09-07T07:14:22.766714+00:00", "result": "no_trade_unresolved", "asset": "SOL", "strategy": "range-trading", "signal": "long", "confidence": 0.57, "stage": "resolve", "resolution_status": "blocked", "reason": "execution-price dislocation is 42.83 bps (max 25.00 bps)", "signal_price": 105.06, "execution_ask": 105.51}
+{"timestamp": "2026-09-07T09:07:45.200784+00:00", "result": "no_setup"}
