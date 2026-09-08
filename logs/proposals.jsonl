@@ -389,3 +389,4 @@
 {"timestamp": "2026-09-07T19:43:15.489129+00:00", "result": "rejected_telegram", "asset": "BTC", "strategy": "momentum-trading", "side": "short", "timeframe": "1h", "confidence": 0.6, "entry": 79112.0, "stop_loss": 79390.0, "target": 78700.0, "leverage": 20.0, "size_usd": 344.32, "margin_usd": 17.22, "risk_usd": 1.21, "reason": "telegram_timeout_no_response_30min"}
 {"timestamp": "2026-09-07T21:06:46.225378Z", "result": "no_setup"}
 {"timestamp": "2026-09-07T23:07:38.061885+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-08T07:07:51.555202+00:00", "result": "no_setup"}
