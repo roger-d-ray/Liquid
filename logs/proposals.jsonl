@@ -398,3 +398,4 @@
 {"timestamp": "2026-09-08T17:43:42.170734+00:00", "result": "rejected_telegram", "asset": "SOL", "strategy": "momentum-trading", "signal": "long", "confidence": 0.6, "reason": "telegram_timeout_no_response"}
 {"timestamp": "2026-09-08T19:06:34Z", "result": "no_setup"}
 {"timestamp": "2026-09-08T21:07:17.233781+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-08T23:08:00.500849+00:00", "result": "no_setup"}
