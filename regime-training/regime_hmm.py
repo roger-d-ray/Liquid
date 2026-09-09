@@ -168,27 +168,40 @@ def predict(model: dict, X_raw: list[list[float]]) -> list[int]:
     return states
 
 
+# ── Posteriori FILTRATE (online): P(stato_t | obs_1..t) per ogni t ───────────
+def filtered_posteriors(model: dict, X_raw: list[list[float]]) -> list[list[float]]:
+    """Posteriori filtrate a ogni istante, usando SOLO il passato.
+
+    E' la quantita' che il bot puo' davvero conoscere in live alla barra t:
+    nessun dato futuro entra nel calcolo. Da non confondere con Viterbi o con le
+    posteriori smoothed (predict_proba), che sono retrospettive e quindi
+    sistematicamente piu' "pulite" di cio' che si vede online.
+    """
+    log_start, log_trans, log_b = _prep(model, X_raw)
+    log_alpha, _ = _forward(log_start, log_trans, log_b)
+    out = []
+    for row in log_alpha:
+        denom = _logsumexp(row)
+        out.append([math.exp(v - denom) for v in row])
+    return out
+
+
 # ── Risposta operativa per il bot live: regime dell'ULTIMA barra ─────────────
 def predict_regime(model: dict, X_raw: list[list[float]]) -> dict:
     """Regime filtrato all'ultimo istante: {state, label, confidence, probs}.
 
     La 'confidence' e' la probabilita' a posteriori dello stato piu' probabile
-    all'ultima barra. Usiamo il forward (posteriore filtrato P(stato_T|obs_1..T)):
-    all'ultimo istante coincide con lo smoothed, e non richiede dati futuri —
-    corretto per l'uso online in produzione.
+    all'ultima barra, presa dal FORWARD FILTERING (P(stato_T | obs_1..T)) — mai da
+    Viterbi. Viterbi ricostruisce il percorso ottimo usando l'intera sequenza e in
+    live non sarebbe disponibile: usarlo qui creerebbe uno scarto sistematico tra
+    cio' che si misura in backtest e cio' che il bot vede davvero.
     """
-    log_start, log_trans, log_b = _prep(model, X_raw)
-    log_alpha, loglik = _forward(log_start, log_trans, log_b)
-    S = len(log_start)
-    last = log_alpha[-1]
-    denom = _logsumexp(last)
-    probs = [math.exp(last[s] - denom) for s in range(S)]
-    best = max(range(S), key=lambda s: probs[s])
+    probs = filtered_posteriors(model, X_raw)[-1]
+    best = max(range(len(probs)), key=lambda s: probs[s])
     labels = model.get("labels") or {}
     return {
         "state": best,
         "label": labels.get(str(best), labels.get(best)),
         "confidence": probs[best],
         "probs": probs,
-        "loglik": loglik,
     }
