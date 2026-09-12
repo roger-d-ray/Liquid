@@ -432,3 +432,4 @@
 {"timestamp": "2026-09-12T11:09:54.790951+00:00", "result": "discarded_margin", "reason": "Trade scartato: la size massima consentita rischierebbe 1.14% dell'equity, sotto il minimo 2.25% (retention 37.9%, richiesto almeno 75%).", "asset": "ETH", "signal": "long", "sizing": {"target_risk_pct": 0.03, "risk_pct": 0.0114, "risk_retention": 0.3794, "minimum_risk_pct": 0.0225, "margin_budget": 17.22, "leverage_ceiling": 20.0}}
 {"timestamp": "2026-09-12T13:07:35.797688+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-12T15:06:48.381125+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-12T17:07:05.153456+00:00", "result": "no_setup"}
