@@ -452,3 +452,4 @@
 {"timestamp": "2026-09-14T19:12:58.304654+00:00", "result": "executed", "strategy": "momentum-trading", "asset": "ETH", "signal": "long", "timeframe": "15m", "order_id": "544973196418", "trade_id": "5e9db867-64ce-452e-aba3-718c34c05c0a", "symbol": "ETH-PERP", "entry": 2537.6, "tp": 2559.0, "sl": 2521.5, "size_usd": 240.69, "leverage": 14.0, "risk_pct": 0.03, "risk_usd": 1.29, "confidence": 0.6, "rr_ratio": 1.33, "exchange": "hyperliquid", "executionMode": "live"}
 {"timestamp": "2026-09-14T21:07:29.165936+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-14T23:08:05Z", "result": "no_setup"}
+{"timestamp": "2026-09-15T07:09:08.420859+00:00", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "confidences": {"BTC_momentum_short": 0.5, "ETH": 0.42, "SOL": 0.43}, "note": "synchronized risk-off, all oversold at 15m lows; no confirmed breakdown / no valid range setup; nothing >= 0.55"}
