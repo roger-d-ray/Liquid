@@ -482,3 +482,4 @@
 {"timestamp": "2026-09-17T13:09:39.615859+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-17T15:09:29.512903Z", "result": "no_setup"}
 {"timestamp": "2026-09-17T17:06:45.174800+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-17T21:12:31+00:00", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "note": "no proposal >= 0.55; best candidate ETH long rejected (1h EMA50<EMA200 death-cross trend filter + Co-Invest smart-money contrarian short)"}
