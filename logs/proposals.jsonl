@@ -493,3 +493,4 @@
 {"timestamp": "2026-09-18T13:21:28.901114+00:00", "result": "execution_blocked_dislocation", "strategy": "momentum-trading", "asset": "ETH", "signal": "long", "timeframe": "1h", "signal_price": 2497.1, "execution_ask": 2504.5, "dislocation_bps": 29.6344, "max_dislocation_bps": 25.0, "approved_telegram": true, "executed": false, "approved_entry": 2499.1, "tp": 2519.0, "sl": 2486.0, "size_usd": 235.56, "leverage": 15.0, "confidence": 0.58, "note": "Telegram approved (Ok) but STEP6 re-resolution blocked on dislocation; no order placed."}
 {"timestamp": "2026-09-18T15:07:48.376222+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-18T17:06:44.668548+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-18T19:13:32.021577+00:00", "result": "no_setup"}
