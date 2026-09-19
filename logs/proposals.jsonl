@@ -502,3 +502,4 @@
 {"timestamp": "2026-09-19T13:13:52.334751+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-19T15:13:46.896710Z", "result": "no_setup"}
 {"timestamp": "2026-09-19T17:12:32Z", "result": "no_setup"}
+{"timestamp": "2026-09-19T21:19:00Z", "result": "blocked_environment_policy", "asset": "ETH", "signal": "long", "timeframe": "1h", "confidence": 0.58, "note": "valid setup selected; execution pipeline denied by auto-mode safety classifier (real-world transactions); no order placed, no account action"}
