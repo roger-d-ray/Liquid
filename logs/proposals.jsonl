@@ -496,3 +496,4 @@
 {"timestamp": "2026-09-18T19:13:32.021577+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-18T21:14:17Z", "result": "no_setup"}
 {"timestamp": "2026-09-18T23:14:10Z", "result": "no_setup", "analysis_timestamp": "2026-09-18T23:12:07Z", "assets_analyzed": ["BTC", "ETH", "SOL"], "reason": "1h overbought RSI~79-81 at 24h highs; 15m momentum fading (negative MACD hist); sub-average volume (~0.38x); no volume-backed breakout/momentum trigger; range regime disqualified (1h ADX 55-60 trending); shorts filtered by uptrend"}
+{"timestamp": "2026-09-19T07:12:41.525571+00:00", "result": "no_setup"}
