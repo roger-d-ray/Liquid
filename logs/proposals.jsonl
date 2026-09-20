@@ -509,3 +509,4 @@
 {"timestamp": "2026-09-20T13:15:03.276049+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-20T15:13:59.825769+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-20T17:14:36.053475+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-20T19:17:36.361255+00:00", "result": "no_trade_unresolved", "reason": "coinvest_orderbook_rate_limited_429", "selected": {"asset": "ETH", "strategy": "momentum-trading", "signal": "long", "timeframe": "1h", "confidence": 0.62, "entry": 2627.41, "target": 2649.29, "stop_loss": 2616.0, "rr_ratio": 1.92, "leverage": 10, "risk_pct": 0.03}, "candidates": {"BTC": {"signal": "long", "confidence": 0.57}, "ETH": {"signal": "long", "confidence": 0.62}, "SOL": {"signal": "no_trade", "confidence": 0.46}}, "detail": "show_orderbook(ETH) returned HTTP 429 on 5 attempts over ~90s; executable book side unavailable, book.coin identity unconfirmed, freshness/execution gate unresolved -> no order placed"}
