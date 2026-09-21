@@ -520,3 +520,4 @@
 {"timestamp": "2026-09-21T13:50:13.231822+00:00", "result": "rejected_telegram", "asset": "ETH", "signal": "long", "confidence": 0.58, "reason": "telegram_timeout_no_response"}
 {"timestamp": "2026-09-21T15:13:56Z", "result": "no_setup"}
 {"timestamp": "2026-09-21T17:14:04.724160+00:00", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "reason": "all_extended_no_intraday_trigger_above_0.55"}
+{"timestamp": "2026-09-21T19:16:37.883971Z", "result": "no_setup"}
