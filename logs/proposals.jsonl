@@ -522,3 +522,4 @@
 {"timestamp": "2026-09-21T17:14:04.724160+00:00", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "reason": "all_extended_no_intraday_trigger_above_0.55"}
 {"timestamp": "2026-09-21T19:16:37.883971Z", "result": "no_setup"}
 {"timestamp": "2026-09-21T21:17:48.659730+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-21T23:25:13.264289+00:00", "result": "no_trade_unresolved", "asset": "SOL", "strategy": "momentum-trading", "signal": "long", "timeframe": "15m", "confidence": 0.58, "signal_price": 119.58, "stage": "resolve", "resolution_status": "blocked", "reason": "execution data stale (>30s gate) and price moved ~-33bps from signal (dislocation > 25bps)"}
