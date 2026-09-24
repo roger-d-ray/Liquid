@@ -549,3 +549,4 @@
 {"timestamp": "2026-09-24T17:48:05.199236+00:00", "result": "rejected_telegram", "asset": "SOL", "signal": "long", "timeframe": "15m", "confidence": 0.58, "size_usd": 159.11, "leverage": 10.0, "reason": "telegram_timeout_no_response"}
 {"timestamp": "2026-09-24T19:12:58.225492+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-24T21:13:40.808634Z", "result": "no_setup"}
+{"timestamp": "2026-09-24T23:14:05.008613Z", "result": "no_setup"}
