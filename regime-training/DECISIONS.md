@@ -164,7 +164,11 @@ per il regime.** Riaddestrare su Kraken non è un'alternativa: il suo endpoint
 OHLC dà ~720 barre e non pagina all'indietro, non può fornire lo storico.
 
 **`compare_sources.py` va rieseguito a ogni retraining** (§8): la conclusione è
-netta ma poggia su un solo periodo.
+netta ma poggia su un solo periodo. Seconda esecuzione (25/09/2026, al primo
+retraining, con il modello esportato): disaccordo BTC 5,37% · ETH 2,69% ·
+SOL 4,61% — coerente. **Non è però un periodo indipendente**: le due finestre di
+~30 giorni si sovrappongono per ~28. Conferma la conclusione con il nuovo
+modello, non su dati nuovi; l'indipendenza arriverà dai retraining successivi.
 
 **Semantica dell'endpoint — misurata, non assunta.** `/candles` con
 `[start, end]` include **entrambi** gli estremi: `[a, a+299h]` → 300 candele.
@@ -196,12 +200,20 @@ si rischierebbe il blocco dell'IP cloud.
 
 **Il minimo di 50 righe è stato misurato sul modello a 2 stati.** Convergenza
 della decisione filtrata all'ultima barra (accordo di stato 100% e |Δconfidence|
-≤ 1e-4 rispetto alla storia piena) sul modello validato: BTC 15 · ETH 15 ·
-SOL 30 righe. **La soglia non viene data per scontata dopo un retraining:**
-`train_model.py` rimisura la convergenza di ogni nuovo modello e
-`export_model.py` **rifiuta** se `1,5 × convergenza > 50`. Nota: SOL è il più
-vicino al limite (1,5 × 30 = 45). Se un modello futuro converge più lentamente,
-l'export si ferma e la soglia va rivista qui — non forzata.
+≤ 1e-4 rispetto alla storia piena):
+
+| Modello | BTC | ETH | SOL | margine richiesto 1,5× |
+|---|---|---|---|---|
+| validato (step 4) | 15 | 15 | 30 | 45 ≤ 50 |
+| esportato 25/09/2026 | 20 | 20 | 15 | 30 ≤ 50 |
+
+**La soglia non viene data per scontata dopo un retraining:** `train_model.py`
+rimisura la convergenza di ogni nuovo modello e `export_model.py` **rifiuta** se
+`1,5 × convergenza > 50` (verificato: un modello a 40 righe viene rifiutato). Il
+punto di convergenza oscilla fra retraining (15–30 righe) e l'asset più lento
+cambia: il margine va letto sul caso peggiore, oggi 45 su 50. Se un modello
+futuro converge più lentamente, l'export si ferma e la soglia va rivista qui —
+non forzata.
 
 **Regola di contiguità.** Il detector usa la coda contigua che termina
 all'ultima barra chiusa; se è più corta di 249 barre, tace. Un buco della fonte
