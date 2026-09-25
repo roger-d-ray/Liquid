@@ -1,0 +1,167 @@
+{
+  "asset": "BTC",
+  "bic": 164709.89806389884,
+  "convergence": {
+    "endpoints": 16,
+    "grid": {
+      "10": {
+        "max_conf_err": 0.0025988464178265946,
+        "state_agreement": 1.0
+      },
+      "100": {
+        "max_conf_err": 6.476486014150851e-12,
+        "state_agreement": 1.0
+      },
+      "15": {
+        "max_conf_err": 0.0005184864421391433,
+        "state_agreement": 1.0
+      },
+      "20": {
+        "max_conf_err": 5.279560788551407e-09,
+        "state_agreement": 1.0
+      },
+      "30": {
+        "max_conf_err": 6.448064304720447e-12,
+        "state_agreement": 1.0
+      },
+      "40": {
+        "max_conf_err": 6.448064304720447e-12,
+        "state_agreement": 1.0
+      },
+      "5": {
+        "max_conf_err": 0.2861585164624305,
+        "state_agreement": 1.0
+      },
+      "50": {
+        "max_conf_err": 6.448064304720447e-12,
+        "state_agreement": 1.0
+      },
+      "75": {
+        "max_conf_err": 6.476486014150851e-12,
+        "state_agreement": 1.0
+      }
+    },
+    "reference": "storia piena",
+    "rows_needed": 20,
+    "tolerance": 0.0001
+  },
+  "feature_names": [
+    "adx",
+    "atr_pct",
+    "kaufman_er",
+    "volume_ratio"
+  ],
+  "feature_window_bars": 200,
+  "features_module_sha256": "9de469c5c3eb309080038ae0f61d99fe26f49b75eb85d9747fda86321c1fecd7",
+  "label_rule": {
+    "description": "trend = lo stato con media piu' alta sia di ADX sia di Kaufman ER; range = l'altro. Se ADX e KER indicano stati diversi, il modello non corrisponde alla semantica validata: nessuna etichetta, rifiuto.",
+    "features": [
+      "adx",
+      "kaufman_er"
+    ],
+    "higher_on_all": "trend",
+    "lower_on_all": "range",
+    "method": "centroid_agreement",
+    "on_disagreement": "refuse",
+    "space": "standardized_means"
+  },
+  "labels": {
+    "0": "trend",
+    "1": "range"
+  },
+  "loglik": -82262.45857250766,
+  "means": [
+    [
+      0.6985295606530822,
+      0.4534476179223092,
+      0.5598398763757314,
+      0.3118614071944842
+    ],
+    [
+      -0.5862465754233595,
+      -0.38055957559231535,
+      -0.46985013777206946,
+      -0.26173220472374065
+    ]
+  ],
+  "n_features": 4,
+  "n_obs": 16913,
+  "n_states": 2,
+  "occupancy": {
+    "range": 0.5485721042984686,
+    "trend": 0.45142789570153136
+  },
+  "parity": {
+    "loglik_abs_diff": 1.4551915228366852e-11,
+    "n_obs": 16913,
+    "proba_max_abs_diff": 1.6573911021389165e-08,
+    "viterbi_mismatches": 0
+  },
+  "persistence": {
+    "range": 0.9536035531032832,
+    "trend": 0.9445938369047123
+  },
+  "provenance": {
+    "bars": 17510,
+    "data_source": "coinbase-exchange",
+    "fetched_at": "2026-09-25T09:25:38.669570+00:00",
+    "first_open_time_ms": 1727254800000,
+    "gaps": [
+      [
+        1761404400000,
+        1761426000000
+      ],
+      [
+        1778202000000,
+        1778223600000
+      ]
+    ],
+    "granularity_seconds": 3600,
+    "last_open_time_ms": 1790323200000,
+    "source_module_sha256": "553d799595af1e0d1edd4d1d5da318cb62ee34aef595bc082766868b18a115f1"
+  },
+  "scaler_mean": [
+    26.937830271155665,
+    0.006544084828433206,
+    0.2293783905721997,
+    1.0696704834628428
+  ],
+  "scaler_std": [
+    11.166837485048623,
+    0.002878238607643657,
+    0.16681556993945426,
+    0.9211968768647908
+  ],
+  "scorer_module_sha256": "91587c2c01a13f8d04dc8f676d68f71316b9f661cc1a58cbe6f7b119f44ee6f1",
+  "startprob": [
+    1.0,
+    1.5927092220794227e-106
+  ],
+  "train_first_open_time_ms": 1727971200000,
+  "train_last_open_time_ms": 1790323200000,
+  "trained_at": "2026-09-25T09:27:24.413459+00:00",
+  "transmat": [
+    [
+      0.9445938369047123,
+      0.05540616309528764
+    ],
+    [
+      0.04639644689671692,
+      0.9536035531032832
+    ]
+  ],
+  "vars": [
+    [
+      0.9853532996252703,
+      1.342460915130671,
+      1.1362181288500803,
+      1.5990105190758486
+    ],
+    [
+      0.2590989265862385,
+      0.3951996624640825,
+      0.40188001515635086,
+      0.34714983828289503
+    ]
+  ]
+}

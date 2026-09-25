@@ -1,0 +1,123 @@
+{
+  "data_source": "coinbase-exchange",
+  "decisions": "regime-training/DECISIONS.md",
+  "exported_at": "2026-09-25T09:27:58.712089+00:00",
+  "fail_safe": {
+    "convergence_safety_factor": 1.5,
+    "measured_on": "modello a 2 stati (riverificato a ogni export)",
+    "min_contiguous_bars": 249,
+    "min_feature_rows": 50,
+    "on_violation": "nessun regime -> nessun NUOVO trade nel ciclo; STEP 0 (protezione posizioni) invariato",
+    "target_contiguous_bars": 300
+  },
+  "feature_names": [
+    "adx",
+    "atr_pct",
+    "kaufman_er",
+    "volume_ratio"
+  ],
+  "feature_window_bars": 200,
+  "granularity_seconds": 3600,
+  "label_rule": {
+    "description": "trend = lo stato con media piu' alta sia di ADX sia di Kaufman ER; range = l'altro. Se ADX e KER indicano stati diversi, il modello non corrisponde alla semantica validata: nessuna etichetta, rifiuto.",
+    "features": [
+      "adx",
+      "kaufman_er"
+    ],
+    "higher_on_all": "trend",
+    "lower_on_all": "range",
+    "method": "centroid_agreement",
+    "on_disagreement": "refuse",
+    "space": "standardized_means"
+  },
+  "models": {
+    "BTC": {
+      "convergence_rows": 20,
+      "file": "models/regime_BTC.json",
+      "labels": {
+        "0": "trend",
+        "1": "range"
+      },
+      "n_obs": 16913,
+      "occupancy": {
+        "range": 0.5485721042984686,
+        "trend": 0.45142789570153136
+      },
+      "parity": {
+        "loglik_abs_diff": 1.4551915228366852e-11,
+        "n_obs": 16913,
+        "proba_max_abs_diff": 1.6573911021389165e-08,
+        "viterbi_mismatches": 0
+      },
+      "persistence": {
+        "range": 0.9536035531032832,
+        "trend": 0.9445938369047123
+      },
+      "sha256": "efcbed45d23245ac9502ff189965910a0d6ca851046c941c2986f69da82b68cc",
+      "train_first_open_time_ms": 1727971200000,
+      "train_last_open_time_ms": 1790323200000,
+      "trained_at": "2026-09-25T09:27:24.413459+00:00"
+    },
+    "ETH": {
+      "convergence_rows": 20,
+      "file": "models/regime_ETH.json",
+      "labels": {
+        "0": "range",
+        "1": "trend"
+      },
+      "n_obs": 16913,
+      "occupancy": {
+        "range": 0.5478034647903979,
+        "trend": 0.45219653520960207
+      },
+      "parity": {
+        "loglik_abs_diff": 0.0,
+        "n_obs": 16913,
+        "proba_max_abs_diff": 1.7636919813490692e-08,
+        "viterbi_mismatches": 0
+      },
+      "persistence": {
+        "range": 0.9638476096182543,
+        "trend": 0.9566312483767878
+      },
+      "sha256": "43ff7fb65ea2f1be34bf88aa1b7cd807868f59dfca638d7e6b49ba9b4de09ec0",
+      "train_first_open_time_ms": 1727971200000,
+      "train_last_open_time_ms": 1790323200000,
+      "trained_at": "2026-09-25T09:27:41.552251+00:00"
+    },
+    "SOL": {
+      "convergence_rows": 15,
+      "file": "models/regime_SOL.json",
+      "labels": {
+        "0": "trend",
+        "1": "range"
+      },
+      "n_obs": 16913,
+      "occupancy": {
+        "range": 0.5769526399810796,
+        "trend": 0.42304736001892035
+      },
+      "parity": {
+        "loglik_abs_diff": 0.0,
+        "n_obs": 16913,
+        "proba_max_abs_diff": 1.7300696986133346e-08,
+        "viterbi_mismatches": 0
+      },
+      "persistence": {
+        "range": 0.9689062936639596,
+        "trend": 0.9582795759090174
+      },
+      "sha256": "be2e95e0187b222d5a8d1cb5dcf9f7d2e3720e511d56eb67a85fbcce1edf52ae",
+      "train_first_open_time_ms": 1727971200000,
+      "train_last_open_time_ms": 1790323200000,
+      "trained_at": "2026-09-25T09:27:58.535311+00:00"
+    }
+  },
+  "modules": {
+    "regime_features.py": "9de469c5c3eb309080038ae0f61d99fe26f49b75eb85d9747fda86321c1fecd7",
+    "regime_hmm.py": "91587c2c01a13f8d04dc8f676d68f71316b9f661cc1a58cbe6f7b119f44ee6f1",
+    "regime_source.py": "553d799595af1e0d1edd4d1d5da318cb62ee34aef595bc082766868b18a115f1"
+  },
+  "n_states": 2,
+  "schema_version": 1
+}
