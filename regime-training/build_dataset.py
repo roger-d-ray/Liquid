@@ -21,8 +21,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import statistics
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Il file gira dentro regime-training/, quindi la sua cartella e' gia' in
@@ -30,8 +33,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import regime_features as rf  # noqa: E402
 
-HISTORY_DIR = Path(__file__).parent / "data" / "history"
-FEATURES_DIR = Path(__file__).parent / "data" / "features"
+HERE = Path(__file__).parent
+HISTORY_DIR = HERE / "data" / "history"
+FEATURES_DIR = HERE / "data" / "features"
+MANIFEST = FEATURES_DIR / "manifest.json"
 STEP_MS = 3600 * 1000  # 1 ora in millisecondi: il passo atteso tra barre 1h
 ASSETS = ("BTC", "ETH", "SOL")
 
@@ -133,10 +138,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--assets", nargs="+", default=list(ASSETS), choices=list(ASSETS))
     args = parser.parse_args(argv)
 
+    # HASH REGISTRATO AL MOMENTO DELL'USO. E' il codice feature che produce QUESTO
+    # dataset: viaggera' dentro il modello, e l'export verifichera' che il file
+    # attuale coincida. Hashare all'export invece che qui lascerebbe passare in
+    # silenzio una modifica fatta fra build e export.
+    features_sha = hashlib.sha256((HERE / "regime_features.py").read_bytes()).hexdigest()
+    prov_path = HISTORY_DIR / "provenance.json"
+    provenance = json.loads(prov_path.read_text()) if prov_path.exists() else {}
+    manifest = json.loads(MANIFEST.read_text()) if MANIFEST.exists() else {}
+
     print(f"Finestra canonica: {rf.FEATURE_WINDOW_BARS} barre · "
-          f"feature: {', '.join(rf.FEATURE_NAMES)}\n")
+          f"feature: {', '.join(rf.FEATURE_NAMES)} · "
+          f"regime_features.py sha256 {features_sha[:12]}…\n")
     exit_code = 0
     for asset in args.assets:
+        if asset not in provenance:
+            print(f"[{asset}] storico senza provenienza: rilancia fetch_history.py\n")
+            exit_code = 1
+            continue
         try:
             rows, st = build_asset(asset)
         except FileNotFoundError:
@@ -148,6 +167,14 @@ def main(argv: list[str] | None = None) -> int:
             exit_code = 1
             continue
         out = write_features(asset, rows)
+        manifest[asset] = {
+            "features_module_sha256": features_sha,
+            "feature_names": list(rf.FEATURE_NAMES),
+            "feature_window_bars": rf.FEATURE_WINDOW_BARS,
+            "built_at": datetime.now(timezone.utc).isoformat(),
+            "rows": st["rows"],
+            "history_provenance": provenance[asset],
+        }
         print(
             f"[{asset}] {st['rows']} righe feature "
             f"(su {st['total_bars']} barre: -{st['warmup_skipped']} warm-up, "
@@ -156,6 +183,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"        min/mediana/max: {_describe(rows)}")
         print(f"        -> {out}\n")
 
+    FEATURES_DIR.mkdir(parents=True, exist_ok=True)
+    MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return exit_code
 
 

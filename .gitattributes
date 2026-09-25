@@ -1,0 +1,11 @@
+# Byte-identita' del regime detector: questi file sono verificati con SHA-256
+# fra training, export e produzione. Git non deve MAI normalizzarli (fine riga,
+# encoding), altrimenti un checkout su un'altra macchina cambierebbe l'hash e il
+# detector smetterebbe di emettere il regime. Vedi regime-training/DECISIONS.md §5.
+regime_features.py -text
+regime_hmm.py -text
+regime_source.py -text
+models/*.json -text
+regime-training/regime_features.py -text
+regime-training/regime_hmm.py -text
+regime-training/regime_source.py -text

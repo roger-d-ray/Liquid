@@ -85,8 +85,13 @@ def main(argv=None) -> int:
              for t in times[start_idx:end_idx]]
     prices = closes[start_idx:end_idx]
 
-    fig, axes = plt.subplots(2, 1, figsize=(14, 7.5), sharex=True)
-    for ax, n_states in zip(axes, (2, 3)):
+    # Solo le configurazioni per cui esiste un artefatto (dopo DECISIONS §1 il
+    # training produce solo 2 stati; i 3 stati restano materia di validate_model).
+    counts = [k for k in (2, 3) if (ARTIFACTS_DIR / f"{args.asset}_hmm_{k}.json").exists()]
+    fig, axes = plt.subplots(len(counts), 1, figsize=(14, 3.8 * len(counts)),
+                             sharex=True, squeeze=False)
+    axes = axes[:, 0]
+    for ax, n_states in zip(axes, counts):
         model = json.loads(
             (ARTIFACTS_DIR / f"{args.asset}_hmm_{n_states}.json").read_text())
         labels = model.get("labels", {})

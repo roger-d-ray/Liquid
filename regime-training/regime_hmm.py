@@ -205,3 +205,53 @@ def predict_regime(model: dict, X_raw: list[list[float]]) -> dict:
         "confidence": probs[best],
         "probs": probs,
     }
+
+
+# ── Etichettatura: DERIVATA dai centroidi, mai assegnata a mano ──────────────
+# hmmlearn numera gli stati in modo arbitrario, e la numerazione puo' cambiare a
+# ogni retraining. L'etichetta quindi non si memorizza "per indice": si deriva
+# dai parametri con una regola fissa. Export e detector usano questa stessa
+# funzione, cosi' un retraining che permuta gli stati resta etichettato bene da solo.
+LABEL_RULE = {
+    "method": "centroid_agreement",
+    "features": ["adx", "kaufman_er"],
+    "space": "standardized_means",
+    "higher_on_all": "trend",
+    "lower_on_all": "range",
+    "on_disagreement": "refuse",
+    "description": (
+        "trend = lo stato con media piu' alta sia di ADX sia di Kaufman ER; "
+        "range = l'altro. Se ADX e KER indicano stati diversi, il modello non "
+        "corrisponde alla semantica validata: nessuna etichetta, rifiuto."
+    ),
+}
+
+
+class LabelError(ValueError):
+    """Il modello non consente un'etichettatura univoca secondo LABEL_RULE."""
+
+
+def derive_labels(model: dict) -> dict:
+    """Etichette {"0"|"1": "trend"|"range"} derivate dai centroidi.
+
+    Lo z-score e' una trasformazione crescente per ogni feature (std > 0),
+    quindi confrontare le medie standardizzate da' lo stesso ordinamento delle
+    medie in unita' originali.
+    """
+    if model.get("n_states") != 2:
+        raise LabelError(f"regola definita per 2 stati, trovati {model.get('n_states')}")
+    names = model.get("feature_names") or []
+    try:
+        idx = [names.index(f) for f in LABEL_RULE["features"]]
+    except ValueError as exc:
+        raise LabelError(f"feature della regola assenti dal modello: {names}") from exc
+    means = model["means"]
+    winners = set()
+    for i in idx:
+        if means[0][i] == means[1][i]:
+            raise LabelError(f"parita' esatta su {names[i]}: stati indistinguibili")
+        winners.add(0 if means[0][i] > means[1][i] else 1)
+    if len(winners) != 1:
+        raise LabelError("ADX e Kaufman ER indicano stati diversi come 'trend'")
+    trend = winners.pop()
+    return {str(trend): "trend", str(1 - trend): "range"}

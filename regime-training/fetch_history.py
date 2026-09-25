@@ -1,260 +1,118 @@
-"""fetch_history.py — Passo 1 della pipeline di regime detection (SOLO training).
+"""fetch_history.py — Passo 1: storico OHLCV 1h per il training.
 
-Scarica lo storico OHLCV a 1 ora di BTC/ETH/SOL da Coinbase Exchange e lo salva
-in CSV sotto ``regime-training/data/history/``. Da qui i passi successivi
-calcoleranno le feature di regime e addestreranno il modello.
+Scarica ~2 anni di barre 1h di BTC/ETH/SOL e le salva in data/history/.
 
-Perche' Coinbase e non Kraken
-------------------------------
-Il bot live usa Kraken come fonte primaria perche' non geo-blocca gli IP cloud,
-ma l'endpoint OHLC di Kraken restituisce solo le ~720 barre piu' recenti (a 1h =
-~30 giorni) e non permette di risalire indietro nel tempo. Per lo storico
-profondo che serve al training l'unica delle fonti pubbliche gratuite che pagina
-all'indietro e' Coinbase: accetta una finestra ``start``/``end`` e ne restituisce
-fino a 300 candele per richiesta, quindi risaliamo anni indietro una finestra
-alla volta. (Binance klines paginerebbe anche meglio, ma da IP cloud risponde
-HTTP 451.)
+Usa regime_source.py — la stessa sorgente unica del detector live — per fonte,
+parser e paginazione: la stessa riga Coinbase viene interpretata dallo stesso
+codice in training e in produzione. (Kraken non puo' servire qui: il suo endpoint
+OHLC restituisce solo ~720 barre e non pagina all'indietro. DECISIONS.md §3.)
 
-Sicurezza
----------
-Solo lettura da API pubblica gratuita: non tocca il conto Co-Invest ne' la
-routine live, non ha bisogno di credenziali. Nessuna dipendenza esterna: usa solo
-la standard library (urllib), come gia' fa il client Coinbase del bot.
+PROVENIENZA: per ogni asset scrive in data/history/provenance.json la fonte, la
+granularita' e l'SHA-256 di regime_source.py IN USO AL MOMENTO DEL FETCH.
+train_model.py la porta dentro il modello; export_model.py e il detector la
+verificano. Se qualcuno cambia fonte senza riaddestrare, il sistema tace.
+
+I buchi della fonte (manutenzioni Coinbase) restano buchi: vengono registrati,
+mai riempiti. build_dataset.py scarta le finestre che li attraversano.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
+import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
-# ── Costanti Coinbase (allineate a data_fetcher.py del bot) ───────────────────
-COINBASE_BASE = "https://api.exchange.coinbase.com"
-# Coinbase accetta al massimo 300 candele per richiesta: e' il passo con cui
-# paginiamo all'indietro.
-MAX_CANDLES_PER_REQUEST = 300
-# I "prodotti" Coinbase sono coppie contro USD. Manteniamo la mappa esplicita
-# invece di sintetizzare il simbolo, cosi' se un asset cambia ticker si vede qui.
-PRODUCTS = {"BTC": "BTC-USD", "ETH": "ETH-USD", "SOL": "SOL-USD"}
-GRANULARITY_SECONDS = 3600  # 1 ora: il timeframe su cui giudicheremo il regime.
+sys.path.insert(0, str(Path(__file__).parent))
+import regime_source as rs  # noqa: E402
 
-# Pausa tra richieste: il rate limit pubblico di Coinbase e' ~10 req/s; stiamo
-# molto sotto per non farci limitare durante una paginazione lunga.
-REQUEST_PAUSE_SECONDS = 0.25
-
-DEFAULT_OUTDIR = Path(__file__).parent / "data" / "history"
+HERE = Path(__file__).parent
+DEFAULT_OUTDIR = HERE / "data" / "history"
+G = rs.GRANULARITY_SECONDS
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _request_json(url: str, retries: int = 4):
-    """GET con retry+backoff esponenziale su 429/5xx e errori di rete transitori.
-
-    Rispecchia la logica di ``_coinbase_candles`` del bot: gli errori temporanei
-    (troppe richieste, 5xx, timeout) si riprovano; un 4xx diverso da 429 (es. 403
-    di IP bloccato) e' definitivo e va propagato subito, cosi' lo vediamo.
-    """
-    req = urllib.request.Request(url, headers={"User-Agent": "liquid-bot/1.0"})
-    for attempt in range(retries):
-        try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                return json.loads(resp.read())
-        except urllib.error.HTTPError as exc:
-            transient = exc.code == 429 or 500 <= exc.code < 600
-            if transient and attempt < retries - 1:
-                time.sleep(2 ** attempt)
-                continue
-            raise RuntimeError(f"Coinbase HTTP {exc.code} {exc.reason}") from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
-                continue
-            raise RuntimeError(f"Coinbase errore di rete: {exc}") from exc
-    raise RuntimeError("Coinbase: richiesta fallita dopo i retry")
-
-
-def _fetch_window(product: str, start: datetime, end: datetime) -> list[list]:
-    """Una singola richiesta /candles per la finestra [start, end].
-
-    Coinbase risponde con righe ``[time, low, high, open, close, volume]`` in
-    ordine dal piu' recente al piu' vecchio, con ``time`` in secondi epoch.
-    """
-    params = urllib.parse.urlencode(
-        {
-            "granularity": GRANULARITY_SECONDS,
-            "start": start.isoformat(),
-            "end": end.isoformat(),
-        }
-    )
-    url = f"{COINBASE_BASE}/products/{product}/candles?{params}"
-    rows = _request_json(url)
-    if not isinstance(rows, list):
-        raise RuntimeError(f"Coinbase: risposta inattesa per {product}: {rows!r}")
-    return rows
-
-
-def fetch_history(product: str, *, years: float) -> list[dict]:
-    """Scarica ``years`` anni di candele 1h per ``product``, dal piu' vecchio al
-    piu' recente, deduplicate.
-
-    Strategia: si parte da adesso e si risale indietro una finestra da 300 barre
-    alla volta. Ogni pagina ci dice la barra piu' vecchia che ha restituito: la
-    riusiamo come nuovo ``end`` della pagina successiva (il dedup per timestamp
-    gestisce la barra di confine ripetuta). Ci si ferma quando abbiamo superato la
-    data obiettivo, quando una pagina torna vuota, o quando non si guadagna piu'
-    storia (la fonte non ha altro indietro) — quest'ultimo guard evita loop
-    infiniti.
-    """
-    window = timedelta(seconds=GRANULARITY_SECONDS * MAX_CANDLES_PER_REQUEST)
-    target_start = _utcnow() - timedelta(days=years * 365)
-
-    by_time: dict[int, dict] = {}  # open_time(sec) -> candela  (dedup naturale)
-    end = _utcnow()
-    previous_oldest: int | None = None
-    pages = 0
-
-    while True:
-        start = end - window
-        rows = _fetch_window(product, start, end)
-        pages += 1
-        if not rows:
-            break
-
-        for row in rows:
-            ts = int(row[0])
-            by_time[ts] = {
-                "open_time_ms": ts * 1000,
-                "open": float(row[3]),
-                "high": float(row[2]),
-                "low": float(row[1]),
-                "close": float(row[4]),
-                "volume": float(row[5]),
-            }
-
-        oldest = min(int(row[0]) for row in rows)
-        # Guard anti-loop: se la barra piu' vecchia non arretra piu', la fonte non
-        # ha altra storia disponibile per questo prodotto: fermati.
-        if previous_oldest is not None and oldest >= previous_oldest:
-            break
-        previous_oldest = oldest
-
-        # Abbiamo raggiunto (o superato) la profondita' richiesta?
-        if datetime.fromtimestamp(oldest, tz=timezone.utc) <= target_start:
-            break
-
-        # La prossima pagina finisce dove questa e' iniziata (barra di confine
-        # inclusa: il dedup la assorbe).
-        end = datetime.fromtimestamp(oldest, tz=timezone.utc)
-        time.sleep(REQUEST_PAUSE_SECONDS)
-
-    # Ordina in cronologico e taglia esattamente alla finestra richiesta.
-    candles = [by_time[k] for k in sorted(by_time)]
-    target_ms = int(target_start.timestamp() * 1000)
-    candles = [c for c in candles if c["open_time_ms"] >= target_ms]
-
-    # Scarta l'ultima candela se l'ora non e' ancora chiusa: per il training
-    # vogliamo solo barre concluse (stessa filosofia is_final del bot).
-    now_ms = int(_utcnow().timestamp() * 1000)
-    if candles and candles[-1]["open_time_ms"] + GRANULARITY_SECONDS * 1000 > now_ms:
-        candles.pop()
-
-    return candles
+def fetch_history(asset: str, *, years: float, now: float | None = None) -> list[dict]:
+    """Barre chiuse degli ultimi `years` anni, cronologiche. Buchi ammessi."""
+    end_open = rs.last_closed_open_time(time.time() if now is None else now)
+    n = int(years * 365 * 24)
+    first_open = end_open - (n - 1) * G
+    collected, _ = rs.fetch_range(asset, first_open, end_open)
+    return [collected[t] for t in sorted(collected)]
 
 
 def detect_gaps(candles: list[dict]) -> list[tuple[int, int]]:
-    """Ritorna i buchi (barre orarie mancanti) come coppie (prev_ms, next_ms).
-
-    Non li riempiamo qui: e' una diagnostica. Sara' il passo di feature a decidere
-    come trattarli. Un mercato liquido come BTC/ETH dovrebbe averne pochissimi;
-    tanti buchi sono un segnale che i dati vanno guardati prima di fidarsene.
-    """
-    step_ms = GRANULARITY_SECONDS * 1000
-    gaps = []
-    for prev, nxt in zip(candles, candles[1:]):
-        if nxt["open_time_ms"] - prev["open_time_ms"] != step_ms:
-            gaps.append((prev["open_time_ms"], nxt["open_time_ms"]))
-    return gaps
+    step = G * 1000
+    return [(p["open_time_ms"], n["open_time_ms"]) for p, n in zip(candles, candles[1:])
+            if n["open_time_ms"] - p["open_time_ms"] != step]
 
 
 def write_csv(path: Path, candles: list[dict]) -> None:
-    """Scrive il CSV con timestamp sia in millisecondi (per il codice) sia in ISO
-    UTC leggibile (per un controllo a occhio)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(
-            ["open_time_ms", "open_time_iso", "open", "high", "low", "close", "volume"]
-        )
+        w = csv.writer(fh)
+        w.writerow(["open_time_ms", "open_time_iso", "open", "high", "low", "close", "volume"])
         for c in candles:
-            iso = datetime.fromtimestamp(
-                c["open_time_ms"] / 1000, tz=timezone.utc
-            ).isoformat()
-            writer.writerow(
-                [c["open_time_ms"], iso, c["open"], c["high"], c["low"],
-                 c["close"], c["volume"]]
-            )
+            iso = datetime.fromtimestamp(c["open_time_ms"] / 1000, tz=timezone.utc).isoformat()
+            w.writerow([c["open_time_ms"], iso, c["open"], c["high"], c["low"],
+                        c["close"], c["volume"]])
 
 
 def _fmt(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Scarica lo storico 1h di BTC/ETH/SOL da Coinbase (training)"
-    )
-    parser.add_argument("--years", type=float, default=2.0,
-                        help="anni di storico da scaricare (default 2)")
-    parser.add_argument("--assets", nargs="+", default=list(PRODUCTS),
-                        choices=list(PRODUCTS),
-                        help="asset da scaricare (default: tutti)")
-    parser.add_argument("--outdir", type=Path, default=DEFAULT_OUTDIR,
-                        help="cartella di output dei CSV")
-    args = parser.parse_args(argv)
+def main(argv=None) -> int:
+    p = argparse.ArgumentParser(description="Storico 1h per il training (Coinbase)")
+    p.add_argument("--years", type=float, default=2.0)
+    p.add_argument("--assets", nargs="+", default=list(rs.PRODUCTS), choices=list(rs.PRODUCTS))
+    p.add_argument("--outdir", type=Path, default=DEFAULT_OUTDIR)
+    args = p.parse_args(argv)
 
-    print(f"Storico 1h · {args.years} anni · fonte Coinbase Exchange\n")
-    exit_code = 0
+    source_sha = sha256_file(HERE / "regime_source.py")
+    prov_path = args.outdir / "provenance.json"
+    provenance = json.loads(prov_path.read_text()) if prov_path.exists() else {}
+
+    print(f"Storico 1h · {args.years} anni · fonte {rs.SOURCE_ID} · "
+          f"regime_source.py sha256 {source_sha[:12]}…\n")
+    code = 0
     for asset in args.assets:
-        product = PRODUCTS[asset]
-        print(f"[{asset}] scarico {product} ...", flush=True)
+        print(f"[{asset}] scarico {rs.PRODUCTS[asset]} ...", flush=True)
         try:
-            candles = fetch_history(product, years=args.years)
-        except RuntimeError as exc:
+            candles = fetch_history(asset, years=args.years)
+        except rs.SourceError as exc:
+            # Nessun CSV parziale e nessuna provenienza per un asset fallito.
             print(f"[{asset}] ERRORE: {exc}\n", flush=True)
-            exit_code = 1
+            code = 1
             continue
-
-        if not candles:
-            print(f"[{asset}] nessuna candela ricevuta\n", flush=True)
-            exit_code = 1
-            continue
-
         gaps = detect_gaps(candles)
         out = args.outdir / f"{asset}_1h.csv"
         write_csv(out, candles)
+        provenance[asset] = {
+            "data_source": rs.SOURCE_ID,
+            "granularity_seconds": G,
+            "source_module_sha256": source_sha,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "first_open_time_ms": candles[0]["open_time_ms"],
+            "last_open_time_ms": candles[-1]["open_time_ms"],
+            "bars": len(candles),
+            "gaps": [[a, b] for a, b in gaps],
+        }
+        span = (candles[-1]["open_time_ms"] - candles[0]["open_time_ms"]) // (G * 1000) + 1
+        print(f"[{asset}] {len(candles)} barre · {_fmt(candles[0]['open_time_ms'])} → "
+              f"{_fmt(candles[-1]['open_time_ms'])} UTC · buchi {len(gaps)} · "
+              f"copertura {len(candles)/span*100:.2f}%\n", flush=True)
 
-        first = _fmt(candles[0]["open_time_ms"])
-        last = _fmt(candles[-1]["open_time_ms"])
-        # Copertura: quante barre abbiamo vs quante ne attenderemmo senza buchi.
-        span_hours = (
-            candles[-1]["open_time_ms"] - candles[0]["open_time_ms"]
-        ) // (GRANULARITY_SECONDS * 1000) + 1
-        coverage = len(candles) / span_hours * 100 if span_hours else 0.0
-        print(
-            f"[{asset}] {len(candles)} barre · dal {first} al {last} UTC · "
-            f"buchi: {len(gaps)} · copertura {coverage:.2f}% · -> {out}\n",
-            flush=True,
-        )
-
-    return exit_code
+    args.outdir.mkdir(parents=True, exist_ok=True)
+    prov_path.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+    return code
 
 
 if __name__ == "__main__":

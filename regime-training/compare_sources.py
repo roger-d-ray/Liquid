@@ -28,6 +28,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 import regime_features as rf   # noqa: E402
 import regime_hmm              # noqa: E402
+import regime_source as rs     # noqa: E402
 
 COINBASE_BASE = "https://api.exchange.coinbase.com"
 KRAKEN_BASE = "https://api.kraken.com/0/public"
@@ -44,22 +45,12 @@ def _get(url):
 
 
 def coinbase_bars(asset: str, n: int) -> dict[int, dict]:
-    """n barre 1h recenti da Coinbase, paginando all'indietro (300/richiesta)."""
-    out, end = {}, datetime.now(timezone.utc)
-    while len(out) < n:
-        start = end - timedelta(seconds=GRAN * 300)
-        q = urllib.parse.urlencode({"granularity": GRAN,
-                                    "start": start.isoformat(), "end": end.isoformat()})
-        rows = _get(f"{COINBASE_BASE}/products/{COINBASE_PRODUCTS[asset]}/candles?{q}")
-        if not rows:
-            break
-        for r in rows:   # [time, low, high, open, close, volume]
-            out[int(r[0])] = {"open": float(r[3]), "high": float(r[2]),
-                              "low": float(r[1]), "close": float(r[4]),
-                              "volume": float(r[5])}
-        end = datetime.fromtimestamp(min(int(r[0]) for r in rows), tz=timezone.utc)
-        time.sleep(0.25)
-    return out
+    """n barre 1h chiuse da Coinbase, con lo STESSO codice del detector live
+    (regime_source.fetch_range): si misura cio' che la produzione vedra' davvero."""
+    end = rs.last_closed_open_time(time.time())
+    collected, _ = rs.fetch_range(asset, end - (n - 1) * GRAN, end)
+    return {t: {k: v for k, v in bar.items() if k != "open_time_ms"}
+            for t, bar in collected.items()}
 
 
 def kraken_bars(asset: str) -> dict[int, dict]:
@@ -135,7 +126,7 @@ def main(argv=None) -> int:
                   f"{d.max():>10.4f} {np.median(d)/sd[i]:>17.3f}")
 
         # 3) la metrica che conta: disaccordo di REGIME fra le due fonti
-        model = json.loads((ARTIFACTS / f"{asset}_hmm_2.json").read_text())
+        model = json.loads((ARTIFACTS / f"{asset}_hmm_2.json").read_text())  # modello corrente
         sa = np.array(regime_hmm.filtered_posteriors(model, A.tolist())).argmax(axis=1)
         sb = np.array(regime_hmm.filtered_posteriors(model, B.tolist())).argmax(axis=1)
         dis = (sa != sb).mean()
