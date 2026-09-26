@@ -563,3 +563,4 @@
 {"timestamp": "2026-09-26T09:13:42.348865+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-26T11:16:46.942881+00:00", "result": "no_setup", "assets_analyzed": ["BTC", "ETH", "SOL"], "reason": "no proposal >= confidence 0.55; SOL pullback unconfirmed (RSI<55), BTC low-vol into resistance R/R<1.2, ETH flat"}
 {"timestamp": "2026-09-26T13:14:42.367203Z", "result": "no_setup"}
+{"timestamp": "2026-09-26T15:12:17Z", "result": "no_setup"}
