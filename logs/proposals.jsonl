@@ -570,3 +570,4 @@
 {"timestamp": "2026-09-26T21:16:28.209116+00:00", "result": "discarded_margin", "asset": "ETH", "signal": "short", "strategy": "momentum_trading", "timeframe": "15m", "confidence": 0.57, "reason": "la size massima consentita rischierebbe 1.37% equity, sotto minimo 2.25% (retention 45.8%, richiesto 75%)", "sizing": {"target_risk_pct": 0.03, "risk_pct": 0.0137, "risk_retention": 0.4576, "minimum_risk_pct": 0.0225, "margin_budget": 16.46, "leverage_ceiling": 20.0}}
 {"timestamp": "2026-09-26T23:12:48.875954+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-27T07:14:31.288436Z", "result": "no_setup"}
+{"timestamp": "2026-09-27T09:14:09.163022+00:00", "result": "no_setup"}
