@@ -579,3 +579,4 @@
 {"timestamp": "2026-09-27T21:18:10.781384+00:00", "result": "rejected_by_risk_manager", "asset": "SOL", "strategy": "momentum_trading", "signal": "long", "timeframe": "15m", "confidence": 0.57, "rejection_reason": "Long momentum: RSI 49.7 < 55.0. Insufficient upward momentum."}
 {"timestamp": "2026-09-27T23:14:16.871038+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-28T07:13:10.873265Z", "result": "no_setup"}
+{"timestamp": "2026-09-28T09:14:01.373254+00:00", "result": "no_setup"}
