@@ -627,6 +627,27 @@ metà attivazione blocca il trading (prompt nuovo + codice vecchio → flag
 sconosciuto, la routine si ferma; codice nuovo + prompt vecchio → campo assente,
 nessuna apertura).
 
+**Chi può fare cosa.** Il prompt lo modifica **solo il proprietario**, dalla
+pagina delle Routine su claude.ai: la routine è stata creata via HTTP API e
+`update_trigger` da una sessione Claude viene rifiutato. Claude legge il trigger
+(`get_trigger`) e gestisce il codice (PR e merge).
+
+**Ordine: prima il prompt (proprietario), poi il codice (Claude).** Tra i due
+passi lo stato è "prompt nuovo + codice vecchio": se capita una run, lo STEP 1
+(protezione) gira, poi `market_summary.py --with-regime` fallisce e la routine si
+ferma con una notifica. È un blocco **rumoroso e deterministico**. L'ordine
+inverso lascia la run con istruzioni in conflitto (`CLAUDE.md` nuovo contro prompt
+vecchio), quindi con un esito non prevedibile. Claude fa il merge appena
+`get_trigger` restituisce il prompt nuovo.
+
+**Cronaca 30/09/2026.** Alle 14:06 UTC è partita l'attivazione nell'ordine
+opposto. Merge di #1 (`e99e5c7`), poi `update_trigger` rifiutato. Alle 14:14
+Claude, su delega, ha annullato il merge con #2 (`eebbf45`): `main` è tornato
+all'albero precedente al byte e il prompt non è mai cambiato. La run delle 15:08
+è quindi partita dalla configurazione pre-attivazione. La riattivazione è il
+revert di #2 (albero identico a `e99e5c7`, più questa nota), da fare nell'ordine
+qui sopra.
+
 ### Copie dei prompt nel repo
 
 | File | Contenuto | SHA-256 |
@@ -644,11 +665,12 @@ trigger; queste sono copie di revisione e di ripristino.
 Si esegue **nello stesso intervallo fra due run**, subito dopo una run terminata
 (stato del trigger: `last_run.finished_at`).
 
-**1. Prompt (≈ 1 minuto).** Ripristinare il testo di
-`ops/routine_prompt_pre_regime.txt`:
-- da una sessione Claude: `update_trigger(trigger_id="trig_01HJ3fU1mnX1qJj3ZmfkweG8",
-  prompt=<contenuto esatto del file>)`, poi `get_trigger` e confronto col file;
-- a mano: interfaccia delle Routine su claude.ai → incollare il file.
+**1. Prompt (≈ 1 minuto, solo il proprietario).** Incollare il testo di
+`ops/routine_prompt_pre_regime.txt` nella pagina della routine su claude.ai
+(https://claude.ai/code/routines/trig_01HJ3fU1mnX1qJj3ZmfkweG8). Poi una sessione
+Claude verifica con `get_trigger` e confronta il testo col file.
+(`update_trigger` da una sessione Claude viene rifiutato: vedi "Chi può fare
+cosa".)
 
 **2. Codice (≈ 3–5 minuti).** Annullare il merge su `main` con un commit di
 revert (la storia non si riscrive):
@@ -692,3 +714,12 @@ poi avvisa.
 - **Non si torna indietro se:** un asset è `null` per una ragione legittima
   (sotto soglia, storico insufficiente); la telemetria non persiste (il
   fail-closed resta intatto) — si segnala e si corregge in avanti.
+
+**Limite della delega, dopo l'attivazione.** Senza il proprietario, Claude può
+agire solo sul codice, non sul prompt. Per questo un ritorno delegato **non
+riporta il vecchio trading**: porta il bot a "nessuna nuova apertura", con la
+protezione intatta. Il revert del codice, fatto da solo, lascia la routine ferma
+allo STEP 2 con una notifica a ogni run finché il proprietario non incolla il
+prompt vecchio. Una variante più silenziosa, un interruttore nel codice che
+rende `null` tutti gli asset lasciando girare il resto, **non esiste ancora**:
+è da decidere col proprietario, se serve.
