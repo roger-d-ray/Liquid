@@ -771,6 +771,30 @@ Claude. Si deducono dai log su `main` e da ciò che il proprietario vede su
 Telegram. In caso di anomalie si valuta di rimettere il modello precedente, cosa
 che può fare solo il proprietario.
 
+**Bilancio delle prime 3 run (15:08, 17:08, 19:08 UTC del 30/09): pulito.**
+
+| Run | Durata | Output | Costo | Regime (BTC/ETH/SOL) | Esito |
+|---|---|---|---|---|---|
+| 15:10 | 2 min 17 s | 5,6k | $0,80 | trend/range/range | `no_setup` |
+| 17:08 | ~2 min (dai log) | n.d. | n.d. | range/range/range | `no_setup` |
+| 19:09 | 2 min 23 s | 5,2k | $0,81 | range/range/range | `no_setup` |
+
+- Tutte riuscite, con commit STEP 8 a ogni run e i log del regime pubblicati.
+- Detector: 1,0 s circa, Coinbase sempre raggiungibile, catena `prev_run_ts`
+  intera, 0 notifiche, nessun silenzio.
+- Il proprietario ha confermato su Telegram la run delle 15:08: messaggi soliti,
+  nessuno mancante o doppio.
+- Durata e output a circa un terzo della baseline, stabili sulle tre run.
+  Spiegazione: una skill per asset invece di tre (3 analisi invece di 9) e il
+  modello nuovo.
+- Unica nota: la riga `no_setup` delle 19:11 ha due campi in più, `regime` e
+  `note`, oltre a quelli prescritti. Non è un comportamento nuovo: il modello
+  precedente lo faceva in circa il 5% delle righe `no_setup` (21 righe, l'ultima
+  il 26/09). Nessun codice legge `proposals.jsonl`, che viene solo scritto.
+  Quindi non è un'anomalia del cambio di modello.
+- La sessione della run delle 17:08 non è recuperabile: il trigger espone solo
+  l'ultima run.
+
 ## 15. Interruttore di emergenza delle nuove aperture
 
 **Perché.** Il prompt della routine lo modifica solo il proprietario (§14). Serve
@@ -830,3 +854,19 @@ senza una sessione Claude attiva. `main` non è un branch protetto (verificato
 il 30/09/2026), quindi dall'editor web il commit diretto su `main` è possibile.
 Dopo il merge è prevista una prova completa OFF → verifica → ON, fuori dagli
 orari delle run.
+
+**Prova completa, 30/09/2026 alle 19:27–19:28 UTC, fuori dagli orari delle run.**
+Merge della PR #4 (`c946ff9`), poi `OFF` con PR #5 e ritorno a `ON` con PR #6.
+Le verifiche sono state fatte su una copia esportata di `main`, senza scrivere
+nei `logs/` del repo, usando `market_summary.py --with-regime` su input di
+fixture.
+- **OFF**: tutti gli asset `null` con `kill_switch` e la nota corretta, una
+  notifica ⏸️. Il detector non è stato lanciato: nella copia era sostituito da
+  uno script sentinella, che non ha lasciato traccia. Alla seconda run con
+  `OFF`, nessuna nuova notifica.
+- **ON**: file identico al byte a prima (SHA-256 `15549249…`); verdetti normali
+  col detector vero, una notifica ▶️ di ripresa, nessuna alla run successiva.
+  Catena `prev_run_ts` intera.
+- **Stato finale di `main`**: codice identico a subito dopo il merge della PR #4,
+  interruttore su `ON`, log non toccati. La run delle 21:08 non vede la prova e
+  non invia notifiche sull'interruttore.
