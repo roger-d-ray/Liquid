@@ -272,8 +272,19 @@ class SilenceRegister:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if isinstance(event, dict) and event.get("ts") and event.get("asset"):
-                    self.events.append(event)
+                if not (isinstance(event, dict) and event.get("ts") and event.get("asset")):
+                    continue
+                try:
+                    datetime.fromisoformat(event["ts"])
+                except (TypeError, ValueError):
+                    continue
+                self.events.append(event)
+        # Ordine per TIMESTAMP, non per posizione nel file. Il fallback API di
+        # git_push_log.py unisce accodando le righe locali mancanti su main: con
+        # due run sovrapposti un evento potrebbe finire fuori ordine, e lo stato
+        # dedotto dall'ordine del file sarebbe sbagliato. Ordinamento stabile:
+        # a parita' di timestamp resta l'ordine di scrittura.
+        self.events.sort(key=lambda e: datetime.fromisoformat(e["ts"]))
         self.pending: list[dict] = []
 
     def _for(self, asset: str, kinds: tuple[str, ...]) -> list[dict]:

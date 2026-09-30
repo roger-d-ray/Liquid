@@ -303,9 +303,13 @@ committati**. Restano git-ignored solo lo storico e gli artefatti intermedi.
 3. `train_model.py` — 2 stati; parità, etichette e convergenza **bloccanti**
 4. `compare_sources.py` — riconferma della decisione di fonte (§3)
 5. `export_model.py` — tutte le verifiche; rifiuta invece di avvisare
-6. `python3 -m unittest discover -s regime-training -p 'test_*.py'`
+6. `analyze_confidence.py` — riconferma della soglia di confidence **fuori
+   campione** (§10): il ginocchio in walk-forward deve restare in
+   **[0,93 – 0,97]**. Se esce dall'intervallo, la soglia si riapre qui — non si
+   tiene 0,95 per inerzia.
+7. `python3 -m unittest discover -s regime-training -p 'test_*.py'`
    (con `REGIME_LIVE_TESTS=1` anche la cucitura contro Coinbase reale)
-7. **commit** di `models/` e dei tre moduli
+8. **commit** di `models/` e dei tre moduli
 
 Il retraining **non** cambia numero di stati, feature, fonte, soglie.
 
@@ -324,10 +328,32 @@ API REST GitHub perché nel cloud il proxy blocca il push su `main`.
 Il registro dei silenzi è quindi `logs/regime_silence.jsonl`, append-only, sullo
 stesso canale di `proposals.jsonl`. Nessun meccanismo nuovo inventato.
 
-> ⚠️ `git_push_log.py` ha `LOG_PATH` **hardcoded** su `proposals.jsonl`. Va
-> parametrizzato in modo retrocompatibile quando si collega la routine — lavoro
-> dello **step 7**, non fatto qui. Finché non è fatto, il registro sopravvive
-> solo nelle esecuzioni locali.
+Il canale funziona davvero in produzione, verificato e non assunto: al
+30/09/2026 `main` contiene **295 commit `bot: run`** che toccano
+`logs/proposals.jsonl`, l'ultimo dello stesso giorno.
+
+`git_push_log.py` accetta ora `--also logs/<nome>.jsonl` per i log aggiuntivi.
+Senza argomenti il comportamento è **identico al precedente**: lo dimostra
+`test_git_push_log.py`, che esegue la versione nuova e una copia congelata della
+vecchia (`test_fixtures/git_push_log_legacy.py`) in 9 scenari — push riuscito,
+fallback API con file esistente o assente, niente di nuovo, GET 500, PUT 409,
+nessun token, niente da committare, token da `.env` — e confronta **tutti** gli
+effetti: comandi git, richieste HTTP (metodo, URL, header, corpo), stdout,
+stderr, exit code. Il test è stato a sua volta verificato introducendo 9
+deviazioni di comportamento: le coglie tutte.
+
+`--also` accetta **solo** `logs/<nome>.jsonl`: lo script scrive su `main` con un
+token, e un percorso sbagliato (es. `.env`) pubblicherebbe segreti.
+
+**Perché non era un dettaglio.** Senza persistenza ogni run ripartirebbe da un
+registro vuoto: durante un silenzio di ~10 giorni la logica "notifica solo sulle
+transizioni" vedrebbe ogni ora come una transizione (~240 notifiche invece di 2),
+e il contatore 5%/90 giorni si azzererebbe a ogni run — l'allarme non
+scatterebbe mai, in silenzio.
+
+**Ordine degli eventi.** Il fallback API unisce accodando le righe locali
+mancanti su `main`: con run sovrapposti un evento potrebbe finire fuori ordine.
+Il registro è quindi ordinato per **timestamp**, non per posizione nel file.
 
 ### Il registro osserva, non decide
 
@@ -350,46 +376,94 @@ rientro. Il 2,8% storico è una misura del passato, non una garanzia.
 
 ---
 
-## 10. Soglia di confidence — dati per la decisione (step 7)
+## 10. Soglia di confidence: **0,95**, uniforme sui tre asset
 
-`analyze_confidence.py`, modello a 2 stati, 16.713 ore per asset. "Errore" = lo
-stato filtrato online differisce da quello Viterbi retrospettivo.
+**Decisione:** sotto confidence 0,95 il detector non dichiara un regime operativo
+(nessuna nuova apertura). Criterio di conferma fissato **prima** di vedere i
+numeri fuori campione: il ginocchio deve cadere in [0,93 – 0,97].
 
-La confidence è **satura** (mediana 0,998) ma il tasso di errore per fascia
-**non è piatto: crolla**, e crolla nello stesso punto su tutti e tre gli asset.
+"Errore" = lo stato filtrato online (ciò che il bot vede) differisce da quello
+Viterbi retrospettivo. **Ginocchio** = la soglia minima *t* (griglia 0,01) oltre
+la quale **ogni** fascia locale larga 0,02 ha errore ≤ 5%; riportato anche con
+3% e 10% per mostrare che non dipende da quella scelta.
 
-| fascia di confidence | % ore | errore BTC | errore ETH | errore SOL |
-|---|---|---|---|---|
-| [0,50–0,90) | 13–15% | 34–49% | 38–49% | 40–50% |
-| [0,90–0,95) | 4–5% | 14,1% | 22,5% | 21,0% |
-| **[0,95–0,99)** | 11–12% | **0,58%** | **0,99%** | **1,12%** |
-| [0,99–1,00] | 70–74% | 0,00% | 0,00% | 0,00% |
+### Perché non basta la verifica in-sample
 
-Sotto 0,90 l'errore è ~50%: per un modello a due stati è **il caso**. Confidence
-bassa significa davvero assenza di informazione, non informazione debole.
+La prima tabella usava il modello finale sullo stesso storico su cui era stato
+addestrato: il modello confrontato con sé stesso, con una calibrazione della
+confidence ottimista per costruzione. La conferma è stata rifatta in
+**walk-forward** — stesso protocollo dello step 4 (8 fold expanding × 1.300 ore
+held-out), scaler e modello fittati solo sul passato di ciascun fold, una riga
+contata solo dopo ≥ 50 righe contigue di filtro (come il detector), e il
+riferimento Viterbi esteso oltre la fine del fold, così che a fine fold non
+coincida col filtro.
 
-Prezzo di ogni soglia (ore escluse → errore sulle ore che restano):
+### Risultato: il ginocchio non si sposta
+
+| Asset | criterio 3% | 5% | 10% |
+|---|---|---|---|
+| BTC | 0,95 / 0,95 | 0,94 / 0,94 | 0,93 / 0,93 |
+| ETH | 0,96 / 0,96 | 0,95 / 0,95 | 0,95 / 0,95 |
+| SOL | 0,96 / 0,96 | 0,95 / 0,95 | 0,94 / 0,94 |
+
+*(in-sample / walk-forward)* — **coincidono in 9 casi su 9**, tutti in
+[0,93 – 0,97]. L'ottimismo in-sample esiste, ma è piccolo e non tocca il
+ginocchio: l'errore senza soglia sale di poco fuori campione (BTC 6,07% → 6,55%,
+SOL 5,79% → 6,18%) e le fasce di transizione peggiorano un po' (ETH [0,93–0,95)
+da 15,8% a 22,1%), ma la confidence oltre la quale l'errore crolla resta la
+stessa.
+
+Prezzo in walk-forward (ore escluse → errore sulle ore che restano):
 
 | soglia | BTC | ETH | SOL |
 |---|---|---|---|
-| nessuna | 0% → 6,07% | 0% → 5,91% | 0% → 5,74% |
-| 0,90 | 13,0% → 0,83% | 11,2% → 1,21% | 10,7% → 1,21% |
-| **0,95** | **17,6% → 0,09%** | **15,5% → 0,13%** | **15,2% → 0,16%** |
-| 0,99 | 29,9% → 0,00% | 26,3% → 0,00% | 26,9% → 0,00% |
+| nessuna | 0% → 6,55% | 0% → 5,78% | 0% → 6,18% |
+| 0,93 | 15,5% → 0,31% | 12,6% → 0,67% | 13,2% → 0,59% |
+| **0,95** | **18,1% → 0,05%** | **14,7% → 0,15%** | **15,3% → 0,18%** |
+| 0,97 | 22,0% → 0,01% | 17,5% → 0,01% | 18,7% → 0,01% |
 
-**Il ginocchio è a 0,95**: l'errore scende di ~60× escludendo ~15–18% delle ore.
-Salire a 0,99 costa altri ~12 punti di ore per guadagnare 0,1 punti di errore:
-scambio pessimo.
+### La soglia lavora soprattutto sul gate più debole
 
-> ⚠️ **L'errore qui NON è PnL.** Misura quanto spesso l'etichetta di regime viene
-> rivista dal senno di poi, non quanto si guadagna. Vale la stessa distinzione
-> del §1: una soglia compra **coerenza dell'etichetta**, non redditività.
+A soglia 0,95, walk-forward, per stato che il bot vede:
 
-Nota utile: le ore escluse si concentrano sulle **transizioni di regime** (è lì
-che la posteriori è incerta). Una soglia a 0,95 significa in pratica "non aprire
-nuove posizioni mentre il regime sta cambiando" — difendibile come comportamento,
-non solo come costo.
+| | ore escluse range | ore escluse trend | errore range | errore trend |
+|---|---|---|---|---|
+| BTC | 17,5% | 18,7% | 4,13% → 0,02% | 9,20% → 0,07% |
+| ETH | 13,6% | 15,9% | 3,38% → 0,08% | 8,69% → 0,23% |
+| SOL | 13,2% | 18,4% | 3,17% → 0,20% | 10,71% → 0,15% |
 
-**Decisione rimandata allo step 7.** Costo complessivo se si adotta 0,95:
-~15–18% di ore escluse per confidence, più ~2,8% storico di silenzio per buchi
-della fonte (§4).
+Il **costo** è quasi simmetrico (il trend perde 1–5 punti di ore in più), il
+**beneficio** no: la soglia corregge soprattutto il gate "trend", che senza
+soglia era 2,5–3,4× meno affidabile del "range". Dopo la soglia entrambi stanno
+sotto lo 0,25%: l'asimmetria in termini assoluti sparisce.
+
+### "Non aprire durante le transizioni di regime" — misurato, non dedotto
+
+Nella prima stesura questa frase era una **deduzione non verificata**. Misura
+(walk-forward, finestra ±6 ore da un cambio di stato Viterbi):
+
+| | ore vicine a una transizione | … fra le ore escluse | prob. di esclusione vicino / lontano |
+|---|---|---|---|
+| BTC | 46,9% | 71,9% | 27,8% / 9,6% |
+| ETH | 38,3% | 70,2% | 26,9% / 7,1% |
+| SOL | 36,2% | 68,7% | 29,0% / 7,5% |
+
+Vero, ma va detto nella misura giusta: **circa il 70%** delle ore escluse cade
+vicino a una transizione, e lì l'esclusione è **3–4× più probabile**. Il
+restante ~30% no. La soglia significa "**prevalentemente** non aprire durante
+le transizioni di regime", non "solo".
+
+### Avvertenze che restano
+
+> ⚠️ **Questo errore NON è PnL.** Misura quanto spesso l'etichetta di regime
+> viene rivista dal senno di poi, non quanto si guadagna. La soglia compra
+> **coerenza dell'etichetta**, non redditività (stessa distinzione del §1).
+
+**Costo complessivo:** ~15–18% di ore senza nuove aperture per confidence, più
+~2,8% storico di silenzio per buchi della fonte (§4).
+
+**Dove vive la soglia:** nei metadati del modello (`fail_safe`), la applica
+Python e non l'agente — il detector espone un verdetto già deciso
+(`tradable_regime`), non una confidence da confrontare. Implementazione: step 7.
+
+**Riverifica:** a ogni retraining con `analyze_confidence.py` (§8, passo 6).

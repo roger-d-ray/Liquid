@@ -322,6 +322,24 @@ class RegisterTest(unittest.TestCase):
         reg = rd.SilenceRegister(path)
         self.assertTrue(reg.is_silent("BTC"))
 
+    def test_state_does_not_depend_on_line_order(self):
+        # Il fallback API di git_push_log puo' accodare righe fuori ordine:
+        # lo stato deve dipendere dai timestamp, non dalla posizione nel file.
+        start = {"ts": rd._iso(NOW - timedelta(hours=5)), "asset": "BTC",
+                 "event": "silence_start"}
+        end = {"ts": rd._iso(NOW - timedelta(hours=1)), "asset": "BTC",
+               "event": "silence_end"}
+        path = self.dir / "fuori_ordine.jsonl"
+        path.write_text(json.dumps(end) + "\n" + json.dumps(start) + "\n")
+        reg = rd.SilenceRegister(path)
+        self.assertFalse(reg.is_silent("BTC"))
+        self.assertAlmostEqual(reg.silence_fraction("BTC", NOW), 4 / (90 * 24) * 100, places=6)
+
+    def test_unparseable_timestamp_is_skipped(self):
+        path = self.dir / "ts_rotto.jsonl"
+        path.write_text('{"ts": "ieri", "asset": "BTC", "event": "silence_start"}\n')
+        self.assertFalse(rd.SilenceRegister(path).is_silent("BTC"))
+
     def test_events_are_appended_not_rewritten(self):
         path = self.dir / "r.jsonl"
         reg = rd.SilenceRegister(path)
