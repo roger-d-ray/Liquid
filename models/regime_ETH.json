@@ -1,0 +1,167 @@
+{
+  "asset": "ETH",
+  "bic": 163579.75500056855,
+  "convergence": {
+    "endpoints": 16,
+    "grid": {
+      "10": {
+        "max_conf_err": 0.0014888004274420386,
+        "state_agreement": 1.0
+      },
+      "100": {
+        "max_conf_err": 5.735745212120946e-12,
+        "state_agreement": 1.0
+      },
+      "15": {
+        "max_conf_err": 0.001163773383803024,
+        "state_agreement": 1.0
+      },
+      "20": {
+        "max_conf_err": 1.1792115506281675e-08,
+        "state_agreement": 1.0
+      },
+      "30": {
+        "max_conf_err": 5.764055899248888e-12,
+        "state_agreement": 1.0
+      },
+      "40": {
+        "max_conf_err": 5.764055899248888e-12,
+        "state_agreement": 1.0
+      },
+      "5": {
+        "max_conf_err": 0.28420905820245623,
+        "state_agreement": 0.9375
+      },
+      "50": {
+        "max_conf_err": 5.764055899248888e-12,
+        "state_agreement": 1.0
+      },
+      "75": {
+        "max_conf_err": 5.735745212120946e-12,
+        "state_agreement": 1.0
+      }
+    },
+    "reference": "storia piena",
+    "rows_needed": 20,
+    "tolerance": 0.0001
+  },
+  "feature_names": [
+    "adx",
+    "atr_pct",
+    "kaufman_er",
+    "volume_ratio"
+  ],
+  "feature_window_bars": 200,
+  "features_module_sha256": "9de469c5c3eb309080038ae0f61d99fe26f49b75eb85d9747fda86321c1fecd7",
+  "label_rule": {
+    "description": "trend = lo stato con media piu' alta sia di ADX sia di Kaufman ER; range = l'altro. Se ADX e KER indicano stati diversi, il modello non corrisponde alla semantica validata: nessuna etichetta, rifiuto.",
+    "features": [
+      "adx",
+      "kaufman_er"
+    ],
+    "higher_on_all": "trend",
+    "lower_on_all": "range",
+    "method": "centroid_agreement",
+    "on_disagreement": "refuse",
+    "space": "standardized_means"
+  },
+  "labels": {
+    "0": "range",
+    "1": "trend"
+  },
+  "loglik": -81697.38704084251,
+  "means": [
+    [
+      -0.6210473201221209,
+      -0.3415708398280057,
+      -0.4995245526830618,
+      -0.16641783641573538
+    ],
+    [
+      0.7428666844248767,
+      0.40857047290595877,
+      0.5975070436943309,
+      0.19906094489390136
+    ]
+  ],
+  "n_features": 4,
+  "n_obs": 16913,
+  "n_states": 2,
+  "occupancy": {
+    "range": 0.5478034647903979,
+    "trend": 0.45219653520960207
+  },
+  "parity": {
+    "loglik_abs_diff": 0.0,
+    "n_obs": 16913,
+    "proba_max_abs_diff": 1.7636919813490692e-08,
+    "viterbi_mismatches": 0
+  },
+  "persistence": {
+    "range": 0.9638476096182543,
+    "trend": 0.9566312483767878
+  },
+  "provenance": {
+    "bars": 17510,
+    "data_source": "coinbase-exchange",
+    "fetched_at": "2026-09-25T09:26:08.121980+00:00",
+    "first_open_time_ms": 1727254800000,
+    "gaps": [
+      [
+        1761404400000,
+        1761426000000
+      ],
+      [
+        1778202000000,
+        1778223600000
+      ]
+    ],
+    "granularity_seconds": 3600,
+    "last_open_time_ms": 1790323200000,
+    "source_module_sha256": "553d799595af1e0d1edd4d1d5da318cb62ee34aef595bc082766868b18a115f1"
+  },
+  "scaler_mean": [
+    27.62562913815403,
+    0.009893942949744794,
+    0.2359589243499442,
+    1.0600660369414292
+  ],
+  "scaler_std": [
+    12.090800012741482,
+    0.004106435822035851,
+    0.17537990901052655,
+    0.8875216260885548
+  ],
+  "scorer_module_sha256": "91587c2c01a13f8d04dc8f676d68f71316b9f661cc1a58cbe6f7b119f44ee6f1",
+  "startprob": [
+    6.724814403231955e-287,
+    1.0
+  ],
+  "train_first_open_time_ms": 1727971200000,
+  "train_last_open_time_ms": 1790323200000,
+  "trained_at": "2026-09-25T09:27:41.552251+00:00",
+  "transmat": [
+    [
+      0.9638476096182543,
+      0.036152390381745635
+    ],
+    [
+      0.04336875162321213,
+      0.9566312483767878
+    ]
+  ],
+  "vars": [
+    [
+      0.19522601713103868,
+      0.4266073914156982,
+      0.35521315116605207,
+      0.5040624603541847
+    ],
+    [
+      0.9494279305225087,
+      1.3793814357767853,
+      1.1157812483443115,
+      1.5204664781162986
+    ]
+  ]
+}
