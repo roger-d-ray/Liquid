@@ -23,21 +23,8 @@ Env vars:
 
 Usage:
   python git_push_log.py
-  python git_push_log.py --also logs/regime_silence.jsonl   (log aggiuntivi)
-
-Retrocompatibilita': senza argomenti il comportamento e' IDENTICO alla versione
-precedente (stessi comandi git, stesse chiamate API, stessi messaggi, stesso exit
-code). Lo dimostra test_git_push_log.py confrontandolo con una copia congelata
-della vecchia versione (test_fixtures/git_push_log_legacy.py).
-
---also aggiunge log da sincronizzare insieme a proposals.jsonl, che resta sempre
-incluso e trattato come prima. Un log aggiuntivo assente viene saltato (non c'e'
-nulla da sincronizzare: es. il registro dei silenzi prima del primo silenzio).
-Per sicurezza --also accetta SOLO file logs/<nome>.jsonl: lo script scrive su
-main con un token, e un percorso sbagliato (es. .env) pubblicherebbe segreti.
 """
 
-import argparse
 import base64
 import json
 import os
@@ -74,11 +61,11 @@ def _run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=check)
 
 
-def _commit_log(extra_paths: tuple[str, ...] = ()) -> str:
-    """Stage & commit the log(s). Returns the run timestamp used as commit message."""
+def _commit_log() -> str:
+    """Stage & commit the log. Returns the run timestamp used as commit message."""
     _run(["git", "config", "user.email", "bot@liquid.trade"])
     _run(["git", "config", "user.name", "Liquid Bot"])
-    _run(["git", "add", LOG_PATH, *extra_paths])
+    _run(["git", "add", LOG_PATH])
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     committed = _run(["git", "commit", "-m", f"bot: run {ts}"], check=False)
     if committed.returncode != 0:
@@ -115,13 +102,13 @@ def _api(method: str, path: str, token: str, body: dict | None = None) -> dict:
         return json.loads(r.read())
 
 
-def _push_via_api(token: str, message: str, log_path: str = LOG_PATH) -> bool:
+def _push_via_api(token: str, message: str) -> bool:
     """Sync the local log to main via the Contents API (bypasses the git proxy).
 
     Keeps any lines already on main and appends the local lines not yet present,
     so it is safe even if main moved forward since this checkout (log lines are
     unique by timestamp)."""
-    contents_path = f"/repos/{REPO}/contents/{log_path}"
+    contents_path = f"/repos/{REPO}/contents/{LOG_PATH}"
 
     remote_text, sha = "", None
     try:
@@ -134,7 +121,7 @@ def _push_via_api(token: str, message: str, log_path: str = LOG_PATH) -> bool:
             return False
         # 404 -> the file is not on main yet; it will be created by the PUT.
 
-    local_text = Path(log_path).read_text()
+    local_text = Path(LOG_PATH).read_text()
     remote_set = set(remote_text.splitlines())
     new_lines = [ln for ln in local_text.splitlines() if ln not in remote_set]
     if not new_lines:
@@ -163,36 +150,9 @@ def _push_via_api(token: str, message: str, log_path: str = LOG_PATH) -> bool:
     return True
 
 
-def _extra_log_path(value: str) -> str:
-    """Valida un log aggiuntivo: solo logs/<nome>.jsonl, relativo, senza '..'."""
-    p = Path(value)
-    if (p.is_absolute() or ".." in p.parts or len(p.parts) != 2
-            or p.parts[0] != "logs" or p.suffix != ".jsonl"):
-        raise argparse.ArgumentTypeError(
-            f"log aggiuntivo non ammesso: {value!r} (solo logs/<nome>.jsonl)")
-    return p.as_posix()
-
-
-def _parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Sincronizza i log del bot su main")
-    parser.add_argument("--also", action="append", default=[], type=_extra_log_path,
-                        metavar="logs/NOME.jsonl",
-                        help="log aggiuntivo da sincronizzare (ripetibile)")
-    return parser.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(sys.argv[1:] if argv is None else argv)
+def main() -> int:
     _load_dotenv()
-    extras = []
-    for path in dict.fromkeys(args.also):              # dedup, ordine preservato
-        if path == LOG_PATH:
-            continue                                   # gia' incluso sempre
-        if Path(path).exists():
-            extras.append(path)
-        else:
-            print(f"Log aggiuntivo assente, nulla da sincronizzare: {path}")
-    ts = _commit_log(tuple(extras))
+    ts = _commit_log()
     token = os.environ.get("GITHUB_TOKEN", "").strip()
 
     if _try_git_push(token):
@@ -202,11 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     if token:
         print("git push su main non riuscito (atteso nel cloud, proxy): "
               "uso la GitHub Contents API…")
-        ok = _push_via_api(token, f"bot: run {ts}")
-        for path in extras:
-            print(f"Sincronizzo anche {path} via GitHub Contents API…")
-            ok = _push_via_api(token, f"bot: run {ts}", path) and ok
-        if ok:
+        if _push_via_api(token, f"bot: run {ts}"):
             return 0
 
     print("ERRORE: impossibile sincronizzare il log su main.", file=sys.stderr)

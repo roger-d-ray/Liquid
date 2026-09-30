@@ -2,8 +2,7 @@
 
 ## Obiettivo
 
-Bot quantitativo crypto che analizza BTC, ETH e SOL ogni 2 ore, dalle 07 alle 23
-UTC (cron `0 7-23/2 * * *`, 9 run al giorno, nessuna di notte).
+Bot quantitativo crypto che analizza BTC, ETH e SOL ogni 60min.
 Identifica opportunità con le 3 skill in skills/.
 Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 
@@ -53,9 +52,8 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
      quote_volume ed estimated_quote_volume. Una stima non vale come quote
      volume esatto; controlla sempre source, aggregation_method, completeness
      e quality_flags.
-2. Esegui `python market_summary.py --with-regime` e applica le skill al JSON
-   emesso su stdout, **instradate da `market_regime`** (vedi sezione "Regime di
-   mercato"). Questo e' l'unico input per l'analisi: non esplorare
+2. Esegui `python market_summary.py` e applica le 3 skill al JSON emesso su
+   stdout. Questo e' l'unico input per l'analisi: non esplorare
    `data/market_data.json` con Python inline e non assumere strutture annidate
    diverse da quelle esposte dal summary.
    - `assets[asset].signal_timeframes[tf]` contiene
@@ -124,53 +122,6 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
    - `get_portfolio()` → `portfolio.from_coinvest(gp)` → `portfolio.save_portfolio_state(snap)`.
    - **Allega SEMPRE il riepilogo portafoglio al messaggio Telegram di fine run** (quello di trade eseguito / rifiutato / "nessun setup"). Usa `portfolio.build_portfolio_message()` o una riga compatta (equity, disponibile, margine, N posizioni). Questo è il modello **push** che sostituisce il poller `/portfolio` (vedi sezione dedicata): niente processo persistente, portafoglio sempre fresco in chat.
 8. MAX 1 proposta per run (solo la migliore per confidence)
-
-## Regime di mercato — filtro vincolante di apertura
-
-`market_summary.py --with-regime` aggiunge per ogni asset
-`assets[asset].market_regime`, prodotto da `regime_detector.py` (HMM a 2 stati
-addestrato offline — motivazioni e misure in `regime-training/DECISIONS.md`).
-La soglia di confidence (0,95) e ogni controllo di integrità li applica Python:
-ricevi un **verdetto già deciso**, non un numero da interpretare.
-
-**Si decide su un solo campo: `tradable_regime`.**
-
-| `tradable_regime` | Su quell'asset, in questo ciclo |
-|---|---|
-| `"range"` | solo **range-trading** può generare un proposal |
-| `"trend"` | solo **momentum-trading** può generare un proposal |
-| `null` (qualunque `reason`) | **nessuna nuova apertura** |
-| campo assente | come `null`: **nessuna nuova apertura** |
-
-- `state`, `confidence`, `reason`, `detail` sono **diagnostici**: non usarli mai
-  per scavalcare il verdetto. `state: "range"` con `tradable_regime: null` resta
-  nessuna apertura.
-- **Non si valuta più il regime a occhio.** La classificazione range/trend è
-  sostituita da `tradable_regime`: lo Step 3 "Classify the market regime" della
-  skill range-trading e la distinzione trend vs `RANGE_OR_CHOP` dello Step 4
-  della skill momentum-trading non si rifanno sugli indicatori. Tutte le altre
-  fasi delle skill (costruzione del range e delle zone, conferme su barra chiusa,
-  piano di trade, rischio di breakout, costi, R/R) restano invariate.
-- **Il detector non dà la direzione.** Dice *se* c'è trend, non *da che parte*
-  (le sue feature non hanno segno). La direzione viene ancora dalle skill: regola
-  EMA della momentum-trading e filtro EMA50/EMA200 a 1h della trend-following,
-  che resta com'è. `tradable_regime = "trend"` senza una direzione determinabile
-  = nessun trade.
-- **Il regime non tocca mai la protezione.** Housekeeping, `manage_positions.py`,
-  modifiche SL, `intraday_exit.py` e chiusure girano sempre, con o senza regime,
-  e girano **prima** che il regime venga calcolato. Nessuna regola nuova sulle
-  posizioni aperte quando il regime cambia: sono gestite esattamente come prima.
-- **Notifiche:** se `regime_notifications` non è vuoto, invia ogni messaggio così
-  com'è con `python telegram_notify.py --message "<testo>"`. Sono già filtrate da
-  Python (inizio e fine di un silenzio, budget di silenzio): non aggiungerne altre
-  sul regime.
-- **Un guasto del regime non ferma la routine.** Timeout, crash o output invalido
-  del detector arrivano come `tradable_regime: null` con `reason`
-  (`detector_timeout`, `detector_crashed`, …), mai come errore di
-  `market_summary.py`. Se `market_summary.py` fallisce, è per i dati di mercato:
-  comportati come prima (notifica e fermati).
-- `regime_detector` (campo di primo livello) è telemetria per la verifica
-  tecnica: non entra nelle decisioni.
 
 ## Pipeline unica (STEP 2→7) — `propose_pipeline.py` (anti-stale)
 
@@ -303,7 +254,7 @@ Meccanismo che evita il vecchio max-hold cieco: prima di chiudere per tempo, gua
 
 Meccanismo che rende l'uscita intraday **100% automatica, senza intervento umano**.
 
-- **Chi lo triggera:** la routine schedulata stessa. Il cron che fa girare la routine ogni 2 ore (07–23 UTC) *è* il trigger — nessun demone separato, nessun umano. Ad ogni run l'agente esegue lo STEP 0.
+- **Chi lo triggera:** la routine oraria stessa. Il cron che fa girare la routine ogni 60 min *è* il trigger — nessun demone separato, nessun umano. Ad ogni run l'agente esegue lo STEP 0.
 - **Decisione (Python, no credenziali):** `intraday_exit.py` legge lo snapshot `data/portfolio_state.json` e stampa su stdout un array JSON delle posizioni da chiudere. La regola normale è una sola:
   1. **Flatten di fine giornata (garanzia dura):** oltre `FLATTEN_HOUR_UTC` (default 23) chiude TUTTE le posizioni aperte → mai overnight. Non richiede l'orario di apertura, quindi funziona sempre.
   Il vecchio max-hold cieco è disattivato di default; se serve come emergenza legacy usa `FLATTEN_MAX_HOLD_HOURS>0`. Il max-hold normale ora è progress-aware in `manage_positions.py`.
@@ -343,17 +294,13 @@ Non includere istruzioni di reset paper nel prompt routine live.
 - In live, prima di qualunque ordine/chiusura/modifica posizione deve passare `python trading_mode.py --require-live`
 - In live deve passare anche il controllo Co-Invest: se `paper_trading_status()` o la risposta MCP indicano paper, fermati e non eseguire azioni conto
 - In live, il reset paper e' vietato: non chiamare `reset_paper_account()`
-- Le skill in skills/ sono la fonte di verità: non ignorarle mai — con una sola
-  eccezione: la classificazione range/trend è delegata a
-  `market_regime.tradable_regime` (sezione "Regime di mercato")
-- Nuove aperture solo con `tradable_regime` non null, e solo con la skill
-  corrispondente: `range` → range-trading, `trend` → momentum-trading
+- Le skill in skills/ sono la fonte di verità: non ignorarle mai
 
 ## Portafoglio su Telegram — modello PUSH (attivo) vs poller /portfolio (dormiente)
 
 ⚠️ **Architettura attuale: routine nel CLOUD, nessun host always-on.** Il poller persistente (`telegram_bot.py`) e il ponte a file richiedono che lettore e scrittore stiano sulla **stessa macchina** — condizione non soddisfatta (routine cloud, `data/` git-ignored non attraversa git). Quindi:
 
-- **ATTIVO — push del portafoglio (STEP 7):** ad ogni run la routine allega il riepilogo del portafoglio al messaggio Telegram che già invia. Nessun processo persistente, nessun 409, portafoglio fresco a ogni run (ogni 2 ore, 07–23 UTC). Questo è il meccanismo in uso.
+- **ATTIVO — push del portafoglio (STEP 7):** ad ogni run la routine allega il riepilogo del portafoglio al messaggio Telegram che già invia. Nessun processo persistente, nessun 409, portafoglio fresco ogni ~60 min. Questo è il meccanismo in uso.
 - **DORMIENTE — poller `/portfolio` (`telegram_bot.py`):** funziona solo con un host always-on che condivide il filesystem con la routine. Tenuto per uso futuro; NON attivo con il setup cloud attuale. La sezione qui sotto lo descrive per quel caso.
 - **Reset paper:** non disponibile nella routine live. Usare solo manutenzione manuale separata in `TRADING_MODE=paper`.
 
@@ -363,7 +310,7 @@ Comando on-demand per consultare il portafoglio, **separato dal flusso di tradin
 
 - Listener: `telegram_bot.py` — processo **persistente** che fa long-poll di `getUpdates` e risponde ai comandi. Comandi: `/portfolio`, `/help`, `/start`.
 - Avvio: `python telegram_bot.py` (Ctrl-C per fermare). `--once` esegue un solo ciclo di poll (test).
-- Fonte dati: `data/portfolio_state.json` (Opzione B). Lo snapshot è popolato dall'**assistente Co-Invest MCP** che chiama `get_portfolio()` durante la routine schedulata e scrive il file. `/portfolio` legge **solo** la cache e la formatta (`portfolio.py`) — nessuna credenziale exchange richiesta.
+- Fonte dati: `data/portfolio_state.json` (Opzione B). Lo snapshot è popolato dall'**assistente Co-Invest MCP** che chiama `get_portfolio()` durante il routine 60-min e scrive il file. `/portfolio` legge **solo** la cache e la formatta (`portfolio.py`) — nessuna credenziale exchange richiesta.
 - Formattazione: `portfolio.py` → `build_portfolio_message()`. Mostra equity, disponibile, margine usato, e per ogni posizione asset/side/leva/size, entry, mark, PnL. Reader tollerante ai sinonimi di chiave (es. `total_equity`/`equity`, `signal`/`side`, `notional`/`size_usd`).
 - Errori: se lo snapshot manca o è illeggibile, il bot **invia su Telegram il dettaglio dell'errore** invece di crashare.
 - ⚠️ Vincolo single-consumer: Telegram ammette **un solo** consumatore `getUpdates` per bot. Non far girare `telegram_bot.py` in contemporanea a `wait_response()` di `telegram_notify.py` sullo stesso `TELEGRAM_BOT_TOKEN` (→ HTTP 409). Usare bot separati o mettere in pausa il poller mentre una proposta è in attesa di approvazione.

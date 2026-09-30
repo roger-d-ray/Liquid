@@ -14,9 +14,3 @@ launch_pipeline.py
 
 # Per-run agent scratch working dir
 scratch_run/
-
-# Regime-detection training area: lo storico pesante e gli artefatti intermedi
-# di training restano LOCALI. In git entrano solo il modello esportato, i suoi
-# metadati e la copia di regime_features.py nella directory del bot.
-regime-training/data/
-regime-training/artifacts/

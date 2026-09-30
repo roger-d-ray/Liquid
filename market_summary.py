@@ -3,15 +3,6 @@
 The fetcher output is intentionally rich and separates closed bars from
 indicators. This command gives the scheduled routine one documented JSON
 shape, so it never needs ad-hoc Python to discover that schema.
-
---with-regime adds, per asset, ``market_regime`` — the verdict of the regime
-detector (``tradable_regime``: "range" | "trend" | null, plus state, confidence
-and reason) — and, at top level, ``regime_notifications`` (Telegram messages
-the routine must send) and ``regime_detector`` (run telemetry). The detector
-runs in a separate process via regime_gate.py: any failure of it becomes
-``tradable_regime: null`` with a reason, never an error of this command.
-Without the flag the output is byte-identical to the previous version
-(test_market_summary_regime.py compares it with a frozen copy).
 """
 
 from __future__ import annotations
@@ -275,36 +266,6 @@ def build_market_summary(
     return summary
 
 
-def _null_regime(reason: str, detail: str) -> dict:
-    return {"tradable_regime": None, "state": None, "confidence": None,
-            "reason": reason, "detail": detail, "as_of": None, "min_confidence": None}
-
-
-def _attach_market_regime(summary: dict) -> None:
-    """Add market_regime to every asset. Never raises (DECISIONS.md §11).
-
-    The regime is a filter for OPENING positions only: a missing or failed
-    verdict means no new opening on that asset, never an interruption of the
-    routine or of position management.
-    """
-    try:
-        import regime_gate
-        regime = regime_gate.get_market_regime()
-    except Exception as exc:  # noqa: BLE001 - even a broken import must not break the summary
-        regime = {
-            "per_asset": {},
-            "notifications": [
-                f"🛑 Regime non calcolabile ({type(exc).__name__}). Nessuna nuova "
-                f"apertura in questo ciclo. Gestione posizioni aperte invariata."],
-            "telemetry": {"outcome": "gate_unavailable", "detail": str(exc)},
-        }
-    for asset, block in summary["assets"].items():
-        block["market_regime"] = (regime.get("per_asset") or {}).get(asset) or \
-            _null_regime("gate_unavailable", "nessun verdetto per l'asset")
-    summary["regime_notifications"] = list(regime.get("notifications") or [])
-    summary["regime_detector"] = regime.get("telemetry") or {}
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Produce il riepilogo JSON stabile per l'analisi Liquid"
@@ -327,11 +288,6 @@ def _parser() -> argparse.ArgumentParser:
         default=DEFAULT_CONTEXT_BARS,
         help="numero di ClosedBar recenti per 4h/1d",
     )
-    parser.add_argument(
-        "--with-regime",
-        action="store_true",
-        help="aggiunge il verdetto del regime detector (market_regime) per asset",
-    )
     return parser
 
 
@@ -348,8 +304,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: market summary non disponibile: {exc}", file=sys.stderr)
         return 2
 
-    if args.with_regime:
-        _attach_market_regime(summary)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return 0
 
