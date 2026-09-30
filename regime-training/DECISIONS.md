@@ -178,14 +178,20 @@ costruzione. (`[a, a+300h]` ha restituito 301 candele: il tetto documentato di
 
 **Carico in live: 1 richiesta per asset per run** (300 barre = 101 righe di
 feature, 3,3× il punto di convergenza misurato). Più storico peggiorerebbe la
-disponibilità (§4). Totale: 3 richieste all'ora. Il limite pubblico Coinbase è,
-per quanto noto, dell'ordine di 10 richieste/s per IP — **non verificato in
-sessione** (il dominio della documentazione era bloccato dal proxy); il margine
-è di vari ordini di grandezza anche se quel valore fosse sbagliato di 10×. Se
-lo si toccasse: HTTP 429 → retry con backoff 1s/2s/4s → poi `SourceUnavailable`
+disponibilità (§4). Totale: 3 richieste all'ora.
+
+> ⚠️ **Il limite di rate NON è un fatto verificato.** L'ordine di grandezza
+> comunemente citato per l'endpoint pubblico Coinbase è ~10 richieste/s per IP,
+> ma **non è stato letto dalla documentazione** (dominio bloccato dal proxy di
+> rete) **né misurato** — misurarlo martellando l'API rischierebbe il blocco
+> dell'IP cloud. Trattarlo come voce, non come dato: non va citato altrove come
+> se fosse verificato.
+
+Non ha comunque importanza pratica: con 3 richieste **all'ora** il margine resta
+di vari ordini di grandezza anche se quel numero fosse sbagliato di 100×. Se lo
+si toccasse: HTTP 429 → retry con backoff 1s/2s/4s → poi `SourceUnavailable`
 → nessun regime in quel ciclo (§0.1, §0.2). Al massimo 4 tentativi per
-richiesta: nessuna tempesta di retry. Il limite non si misura martellando l'API:
-si rischierebbe il blocco dell'IP cloud.
+richiesta: nessuna tempesta di retry.
 
 ---
 
@@ -302,3 +308,88 @@ committati**. Restano git-ignored solo lo storico e gli artefatti intermedi.
 7. **commit** di `models/` e dei tre moduli
 
 Il retraining **non** cambia numero di stati, feature, fonte, soglie.
+
+
+---
+
+## 9. Silenzio del detector: visibilità e sorveglianza
+
+### Dove vive il registro — e perché lì
+
+Il container cloud si riclona a ogni run, quindi lo stato non può stare in
+`data/` (git-ignored). Il bot ha però **già** il meccanismo giusto: `logs/*.jsonl`
+sono **tracciati in git** e `git_push_log.py` li sincronizza, con fallback via
+API REST GitHub perché nel cloud il proxy blocca il push su `main`.
+
+Il registro dei silenzi è quindi `logs/regime_silence.jsonl`, append-only, sullo
+stesso canale di `proposals.jsonl`. Nessun meccanismo nuovo inventato.
+
+> ⚠️ `git_push_log.py` ha `LOG_PATH` **hardcoded** su `proposals.jsonl`. Va
+> parametrizzato in modo retrocompatibile quando si collega la routine — lavoro
+> dello **step 7**, non fatto qui. Finché non è fatto, il registro sopravvive
+> solo nelle esecuzioni locali.
+
+### Il registro osserva, non decide
+
+La decisione fail-closed non dipende mai dal registro. Se il push fallisce e il
+registro si perde, il caso peggiore è **una notifica ripetuta**, mai un trade
+sbagliato. Il file è letto con tolleranza ai danni: una riga illeggibile viene
+saltata invece di far fallire il detector.
+
+### Notifiche: solo sulle transizioni
+
+Una all'inizio del silenzio (con causa, buco della fonte e **data prevista di
+ripresa**, stimata dalle barre contigue mancanti) e una alla ripresa. Un silenzio
+che continua non notifica nulla: niente messaggi ogni ora.
+
+### Budget di silenzio
+
+Oltre il **5% del tempo negli ultimi 90 giorni** parte un avviso e la questione
+della finestra delle feature (§4) si riapre. Una notifica al superamento, una al
+rientro. Il 2,8% storico è una misura del passato, non una garanzia.
+
+---
+
+## 10. Soglia di confidence — dati per la decisione (step 7)
+
+`analyze_confidence.py`, modello a 2 stati, 16.713 ore per asset. "Errore" = lo
+stato filtrato online differisce da quello Viterbi retrospettivo.
+
+La confidence è **satura** (mediana 0,998) ma il tasso di errore per fascia
+**non è piatto: crolla**, e crolla nello stesso punto su tutti e tre gli asset.
+
+| fascia di confidence | % ore | errore BTC | errore ETH | errore SOL |
+|---|---|---|---|---|
+| [0,50–0,90) | 13–15% | 34–49% | 38–49% | 40–50% |
+| [0,90–0,95) | 4–5% | 14,1% | 22,5% | 21,0% |
+| **[0,95–0,99)** | 11–12% | **0,58%** | **0,99%** | **1,12%** |
+| [0,99–1,00] | 70–74% | 0,00% | 0,00% | 0,00% |
+
+Sotto 0,90 l'errore è ~50%: per un modello a due stati è **il caso**. Confidence
+bassa significa davvero assenza di informazione, non informazione debole.
+
+Prezzo di ogni soglia (ore escluse → errore sulle ore che restano):
+
+| soglia | BTC | ETH | SOL |
+|---|---|---|---|
+| nessuna | 0% → 6,07% | 0% → 5,91% | 0% → 5,74% |
+| 0,90 | 13,0% → 0,83% | 11,2% → 1,21% | 10,7% → 1,21% |
+| **0,95** | **17,6% → 0,09%** | **15,5% → 0,13%** | **15,2% → 0,16%** |
+| 0,99 | 29,9% → 0,00% | 26,3% → 0,00% | 26,9% → 0,00% |
+
+**Il ginocchio è a 0,95**: l'errore scende di ~60× escludendo ~15–18% delle ore.
+Salire a 0,99 costa altri ~12 punti di ore per guadagnare 0,1 punti di errore:
+scambio pessimo.
+
+> ⚠️ **L'errore qui NON è PnL.** Misura quanto spesso l'etichetta di regime viene
+> rivista dal senno di poi, non quanto si guadagna. Vale la stessa distinzione
+> del §1: una soglia compra **coerenza dell'etichetta**, non redditività.
+
+Nota utile: le ore escluse si concentrano sulle **transizioni di regime** (è lì
+che la posteriori è incerta). Una soglia a 0,95 significa in pratica "non aprire
+nuove posizioni mentre il regime sta cambiando" — difendibile come comportamento,
+non solo come costo.
+
+**Decisione rimandata allo step 7.** Costo complessivo se si adotta 0,95:
+~15–18% di ore escluse per confidence, più ~2,8% storico di silenzio per buchi
+della fonte (§4).
