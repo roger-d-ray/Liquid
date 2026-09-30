@@ -730,9 +730,28 @@ la routine.
 alle 14:45 UTC. Il testo salvato, trascritto da `get_trigger`, coincide al byte
 con `ops/routine_prompt_regime.txt` (SHA-256 `33fb8965…`). Merge di #3 alle 14:48
 UTC (`814a07e`). La prima run con il detector acceso è quella delle 15:08 UTC.
-Nota: nello stesso salvataggio il modello della routine è passato da
-`claude-opus-4-8` a `claude-opus-5-5`. Non faceva parte del diff approvato:
-segnalato al proprietario.
+**Cambio di modello della routine, 30/09/2026 alle 14:45:07 UTC.** Nello stesso
+salvataggio del prompt il modello è passato da `claude-opus-4-8` (l'ultima run
+col modello vecchio è quella delle 13:10 UTC) a `claude-opus-5-5`. Non faceva
+parte del diff approvato: probabilmente l'ha reimpostato l'interfaccia. Il
+proprietario ha deciso di tenerlo. Le regole di sicurezza sono in Python e la
+scelta del regime è meccanica, quindi il rischio è contenuto.
+
+**Conseguenza per il bilancio.** Dalla run delle 15:08 UTC sono cambiate **due
+cose insieme**: il detector e il modello. Un comportamento anomalo non va
+attribuito al detector senza prima escludere il modello, e viceversa. Per
+questo le verifiche delle prime run guardano anche ciò che non riguarda il
+regime:
+- step saltati o eseguiti in ordine diverso;
+- proposte in formato diverso;
+- flusso di conferma Telegram diverso;
+- notifiche mancanti o doppie.
+
+Il confronto è con la run delle 13:10: 6 min 21 s, 109k token di contesto, 18k
+di output. Limite: chat Telegram e trascrizioni delle run non sono visibili a
+Claude. Si deducono dai log su `main` e da ciò che il proprietario vede su
+Telegram. In caso di anomalie si valuta di rimettere il modello precedente, cosa
+che può fare solo il proprietario.
 
 ## 15. Interruttore di emergenza delle nuove aperture
 
@@ -786,3 +805,10 @@ sono tollerati. Le righe dopo `OFF` diventano la nota del messaggio Telegram.
 15 mutanti su 15 uccisi. Un sedicesimo mutante era sopravvissuto: colpiva una
 rilettura di riserva di `prev_run_ts` che non scattava in nessun caso realistico.
 Quel codice è stato tolto invece di piegare un test per colpirlo.
+
+**Istruzioni per il proprietario.** Sono in `ops/COME_SPEGNERE.md`, in linguaggio
+non tecnico. Il metodo da GitHub viene per primo perché funziona sempre, anche
+senza una sessione Claude attiva. `main` non è un branch protetto (verificato
+il 30/09/2026), quindi dall'editor web il commit diretto su `main` è possibile.
+Dopo il merge è prevista una prova completa OFF → verifica → ON, fuori dagli
+orari delle run.
