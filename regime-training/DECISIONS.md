@@ -313,6 +313,17 @@ committati**. Restano git-ignored solo lo storico e gli artefatti intermedi.
 
 Il retraining **non** cambia numero di stati, feature, fonte, soglie.
 
+### Indicatore di invecchiamento del modello (da implementare allo step 8)
+
+La **quota di ore con confidence sotto soglia** è un indicatore di invecchiamento:
+un modello che descrive sempre peggio il mercato diventa incerto più spesso.
+Riferimento misurato fuori campione (walk-forward, §10): BTC 18,1% · ETH 14,7% ·
+SOL 15,3%. Si misura in produzione da `logs/regime_runs.jsonl`, dove ogni run
+registra per asset `null:below_confidence_threshold`. Se la quota **sale
+stabilmente** oltre il riferimento, deve partire un avviso e il retraining va
+**anticipato**. Soglia e finestra dell'avviso si fissano allo step 8, prima di
+guardare i dati di produzione, con lo stesso metodo pre-registrato usato qui.
+
 
 ---
 
@@ -587,6 +598,11 @@ non una risposta a un caso osservato. Verifica sui log di `main`:
   Se si sovrapponessero potrebbero proporre due trade nella stessa finestra
   (MAX 1 è per run) e contendersi `getUpdates` su Telegram (409). Non risolto:
   segnalato.
+- **Durata reale di una run:** la run delle 13:10 del 30/09 è terminata alle
+  13:16:44 (~6 minuti), molto lontano dalle 2 ore fra due run.
+- **Mitigazione adottata (30/09/2026):** il proprietario **non lancia run
+  manuali**. Elimina il vettore realistico di sovrapposizione finché non esiste
+  un lock condiviso fra container.
 
 ---
 
@@ -594,3 +610,85 @@ non una risposta a un caso osservato. Verifica sui log di `main`:
 
 - **Il ~30% di ore escluse lontane dalle transizioni** (§10): cosa sono? Da
   analizzare (richiesta del 30/09, non bloccante).
+
+---
+
+## 14. Attivazione e piano di ritorno
+
+### Cosa cambia con l'attivazione
+
+1. Merge su `main` del branch `claude/regime-detection-ml-g0362h` (codice,
+   modelli, `CLAUDE.md`).
+2. Prompt della routine `trig_01HJ3fU1mnX1qJj3ZmfkweG8` sostituito con la
+   versione nuova.
+
+Si fanno **nello stesso intervallo fra due run**, subito dopo una run terminata:
+metà attivazione blocca il trading (prompt nuovo + codice vecchio → flag
+sconosciuto, la routine si ferma; codice nuovo + prompt vecchio → campo assente,
+nessuna apertura).
+
+### Copie dei prompt nel repo
+
+| File | Contenuto | SHA-256 |
+|---|---|---|
+| `ops/routine_prompt_pre_regime.txt` | prompt **prima** dell'attivazione, testo integrale | `a9a773db5c085ca2356014f2fbc2892544c38d9d7f595ef7d9d00d3e431fe6d2` |
+| `ops/routine_prompt_regime.txt` | prompt **dopo** l'attivazione | `33fb8965623f20e05f2da2f56bbca52d1e5f9f7957886d74970940b4df4b8682` |
+
+Il testo "prima" è stato trascritto due volte, indipendentemente, dalla lettura
+del trigger: le due copie sono identiche al byte. I file non hanno intestazioni:
+sono il prompt esatto, da incollare così com'è. Fonte di verità resta il
+trigger; queste sono copie di revisione e di ripristino.
+
+### Piano di ritorno — pochi minuti, in quest'ordine
+
+Si esegue **nello stesso intervallo fra due run**, subito dopo una run terminata
+(stato del trigger: `last_run.finished_at`).
+
+**1. Prompt (≈ 1 minuto).** Ripristinare il testo di
+`ops/routine_prompt_pre_regime.txt`:
+- da una sessione Claude: `update_trigger(trigger_id="trig_01HJ3fU1mnX1qJj3ZmfkweG8",
+  prompt=<contenuto esatto del file>)`, poi `get_trigger` e confronto col file;
+- a mano: interfaccia delle Routine su claude.ai → incollare il file.
+
+**2. Codice (≈ 3–5 minuti).** Annullare il merge su `main` con un commit di
+revert (la storia non si riscrive):
+- a mano, la via più rapida: pagina della PR su GitHub → **Revert** → merge
+  della PR di revert;
+- da una sessione Claude (il proxy blocca il push diretto su `main`):
+
+      git fetch origin main
+      MERGE=$(git log origin/main --merges --format=%H -1 \
+              --grep 'claude/regime-detection-ml-g0362h')
+      git checkout -B claude/revert-regime origin/main
+      git revert -m 1 "$MERGE" --no-edit
+      git push -u origin claude/revert-regime
+      # poi PR verso main e merge
+
+**3. Verifica.** Su `origin/main`, `CLAUDE.md` non contiene la sezione "Regime di
+mercato" e `python3 -m unittest discover -s . -p 'test_*.py'` passa; il trigger
+restituisce il prompt con SHA-256 `a9a773db…`.
+
+**Perché prima il prompt e poi il codice.** È l'ordine inverso dell'attivazione.
+Con il prompt vecchio e il codice ancora nuovo, `market_summary.py` senza flag
+produce l'output di prima al byte (§11): il passo 1 da solo non rompe nulla, e
+il passo 2 si fa con calma entro lo stesso intervallo. L'ordine opposto (codice
+vecchio + prompt nuovo) farebbe fallire `market_summary.py --with-regime` e
+fermerebbe la routine.
+
+**Cosa il ritorno NON tocca:** i log `logs/regime_*.jsonl` già su `main` restano
+come storico (innocui senza il detector).
+
+### Quando tornare indietro
+
+Delega del proprietario (30/09/2026): Claude decide e applica senza attendere,
+poi avvisa.
+
+- **Si torna indietro se:** la routine fallisce o si ferma per l'integrazione
+  (errore di `market_summary.py --with-regime`, STEP 8 non eseguito); lo STEP 1
+  (protezione) è toccato in qualunque modo; il detector è **strutturalmente**
+  inutilizzabile nel container della routine (`integrity_failed`, oppure
+  `source_unavailable` su tutti gli asset, cioè Coinbase irraggiungibile); le
+  notifiche si ripetono a ogni run.
+- **Non si torna indietro se:** un asset è `null` per una ragione legittima
+  (sotto soglia, storico insufficiente); la telemetria non persiste (il
+  fail-closed resta intatto) — si segnala e si corregge in avanti.

@@ -2,7 +2,8 @@
 
 ## Obiettivo
 
-Bot quantitativo crypto che analizza BTC, ETH e SOL ogni 60min.
+Bot quantitativo crypto che analizza BTC, ETH e SOL ogni 2 ore, dalle 07 alle 23
+UTC (cron `0 7-23/2 * * *`, 9 run al giorno, nessuna di notte).
 Identifica opportunità con le 3 skill in skills/.
 Notifica via Telegram. Aspetta conferma manuale prima di eseguire.
 
@@ -302,7 +303,7 @@ Meccanismo che evita il vecchio max-hold cieco: prima di chiudere per tempo, gua
 
 Meccanismo che rende l'uscita intraday **100% automatica, senza intervento umano**.
 
-- **Chi lo triggera:** la routine oraria stessa. Il cron che fa girare la routine ogni 60 min *è* il trigger — nessun demone separato, nessun umano. Ad ogni run l'agente esegue lo STEP 0.
+- **Chi lo triggera:** la routine schedulata stessa. Il cron che fa girare la routine ogni 2 ore (07–23 UTC) *è* il trigger — nessun demone separato, nessun umano. Ad ogni run l'agente esegue lo STEP 0.
 - **Decisione (Python, no credenziali):** `intraday_exit.py` legge lo snapshot `data/portfolio_state.json` e stampa su stdout un array JSON delle posizioni da chiudere. La regola normale è una sola:
   1. **Flatten di fine giornata (garanzia dura):** oltre `FLATTEN_HOUR_UTC` (default 23) chiude TUTTE le posizioni aperte → mai overnight. Non richiede l'orario di apertura, quindi funziona sempre.
   Il vecchio max-hold cieco è disattivato di default; se serve come emergenza legacy usa `FLATTEN_MAX_HOLD_HOURS>0`. Il max-hold normale ora è progress-aware in `manage_positions.py`.
@@ -352,7 +353,7 @@ Non includere istruzioni di reset paper nel prompt routine live.
 
 ⚠️ **Architettura attuale: routine nel CLOUD, nessun host always-on.** Il poller persistente (`telegram_bot.py`) e il ponte a file richiedono che lettore e scrittore stiano sulla **stessa macchina** — condizione non soddisfatta (routine cloud, `data/` git-ignored non attraversa git). Quindi:
 
-- **ATTIVO — push del portafoglio (STEP 7):** ad ogni run la routine allega il riepilogo del portafoglio al messaggio Telegram che già invia. Nessun processo persistente, nessun 409, portafoglio fresco ogni ~60 min. Questo è il meccanismo in uso.
+- **ATTIVO — push del portafoglio (STEP 7):** ad ogni run la routine allega il riepilogo del portafoglio al messaggio Telegram che già invia. Nessun processo persistente, nessun 409, portafoglio fresco a ogni run (ogni 2 ore, 07–23 UTC). Questo è il meccanismo in uso.
 - **DORMIENTE — poller `/portfolio` (`telegram_bot.py`):** funziona solo con un host always-on che condivide il filesystem con la routine. Tenuto per uso futuro; NON attivo con il setup cloud attuale. La sezione qui sotto lo descrive per quel caso.
 - **Reset paper:** non disponibile nella routine live. Usare solo manutenzione manuale separata in `TRADING_MODE=paper`.
 
@@ -362,7 +363,7 @@ Comando on-demand per consultare il portafoglio, **separato dal flusso di tradin
 
 - Listener: `telegram_bot.py` — processo **persistente** che fa long-poll di `getUpdates` e risponde ai comandi. Comandi: `/portfolio`, `/help`, `/start`.
 - Avvio: `python telegram_bot.py` (Ctrl-C per fermare). `--once` esegue un solo ciclo di poll (test).
-- Fonte dati: `data/portfolio_state.json` (Opzione B). Lo snapshot è popolato dall'**assistente Co-Invest MCP** che chiama `get_portfolio()` durante il routine 60-min e scrive il file. `/portfolio` legge **solo** la cache e la formatta (`portfolio.py`) — nessuna credenziale exchange richiesta.
+- Fonte dati: `data/portfolio_state.json` (Opzione B). Lo snapshot è popolato dall'**assistente Co-Invest MCP** che chiama `get_portfolio()` durante la routine schedulata e scrive il file. `/portfolio` legge **solo** la cache e la formatta (`portfolio.py`) — nessuna credenziale exchange richiesta.
 - Formattazione: `portfolio.py` → `build_portfolio_message()`. Mostra equity, disponibile, margine usato, e per ogni posizione asset/side/leva/size, entry, mark, PnL. Reader tollerante ai sinonimi di chiave (es. `total_equity`/`equity`, `signal`/`side`, `notional`/`size_usd`).
 - Errori: se lo snapshot manca o è illeggibile, il bot **invia su Telegram il dettaglio dell'errore** invece di crashare.
 - ⚠️ Vincolo single-consumer: Telegram ammette **un solo** consumatore `getUpdates` per bot. Non far girare `telegram_bot.py` in contemporanea a `wait_response()` di `telegram_notify.py` sullo stesso `TELEGRAM_BOT_TOKEN` (→ HTTP 409). Usare bot separati o mettere in pausa il poller mentre una proposta è in attesa di approvazione.

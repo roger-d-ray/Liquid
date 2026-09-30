@@ -9,3 +9,6 @@ models/*.json -text
 regime-training/regime_features.py -text
 regime-training/regime_hmm.py -text
 regime-training/regime_source.py -text
+# Prompt della routine, copie esatte per revisione e ripristino (DECISIONS.md §14):
+# il loro SHA-256 e' registrato, quindi anche qui niente normalizzazioni.
+ops/*.txt -text
