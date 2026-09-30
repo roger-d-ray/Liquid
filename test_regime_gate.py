@@ -38,6 +38,15 @@ def payload(assets, **extra):
 class Gate(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
+        self.set_switch("ON\n")          # stato normale; i test dell'interruttore lo cambiano
+
+    def set_switch(self, text):
+        path = self.tmp / rg.SWITCH_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(text, bytes):
+            path.write_bytes(text)
+        else:
+            path.write_text(text, encoding="utf-8")
 
     def script(self, body: str) -> Path:
         p = self.tmp / f"fake_{len(list(self.tmp.glob('fake_*')))}.py"
@@ -172,6 +181,125 @@ class NotificationAndTelemetryTest(Gate):
         res = self.gate(self.emit(payload({a: ok_entry() for a in rg.ASSETS})))
         self.assertEqual(res["per_asset"]["BTC"]["tradable_regime"], "range")
         self.assertIn("telemetry_error", res["telemetry"])
+
+
+class KillSwitchTest(Gate):
+    """Interruttore di emergenza (DECISIONS.md §15): spegne le nuove aperture senza
+    toccare il prompt. Fail-closed, notifiche solo sulle transizioni."""
+
+    def good(self):
+        return self.emit(payload({a: ok_entry() for a in rg.ASSETS}))
+
+    def sentinel_script(self):
+        # Se il detector venisse lanciato, lascerebbe questa traccia su disco.
+        self.sentinel = self.tmp / "detector_lanciato"
+        return self.script(f"open({str(self.sentinel)!r}, 'w').write('x')\n"
+                           f"print({json.dumps(json.dumps(payload({a: ok_entry() for a in rg.ASSETS})))})\n")
+
+    def test_off_nulls_every_asset_and_never_launches_the_detector(self):
+        self.set_switch("OFF\nmanutenzione Coinbase\n")
+        res = self.gate(self.sentinel_script())
+        self.assert_all_null(res, "kill_switch")
+        self.assertEqual(res["per_asset"]["BTC"]["detail"], "manutenzione Coinbase")
+        self.assertFalse(self.sentinel.exists())
+        self.assertEqual(res["telemetry"]["outcome"], "kill_switch")
+        self.assertEqual(res["telemetry"]["assets"], {a: "null:kill_switch" for a in rg.ASSETS})
+        # Spegnimento voluto: nessun evento nel registro dei silenzi (budget intatto)
+        self.assertFalse((self.tmp / rg.SILENCE_LOG).exists())
+
+    def test_on_launches_the_detector(self):
+        res = self.gate(self.sentinel_script())
+        self.assertTrue(self.sentinel.exists())
+        self.assertEqual(res["per_asset"]["BTC"]["tradable_regime"], "range")
+        self.assertEqual(res["notifications"], [])
+
+    def test_anything_but_on_is_fail_closed(self):
+        cases = {
+            "file assente": None,
+            "file vuoto": "",
+            "solo commenti": "# ON\n",
+            "parola sbagliata": "ACCESO\n",
+            "OFF con testo sulla stessa riga": "OFF - manutenzione\n",
+            "ON con punteggiatura": "ON.\n",
+            "byte non UTF-8": b"\xff\xfeON\n",
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                if text is None:
+                    (self.tmp / rg.SWITCH_FILE).unlink(missing_ok=True)
+                else:
+                    self.set_switch(text)
+                res = self.gate(self.good())
+                self.assert_all_null(res, "kill_switch_unreadable")
+                self.assertEqual(len(res["notifications"]), 1)
+                (self.tmp / rg.RUNS_LOG).unlink(missing_ok=True)   # ogni caso da zero
+
+    def test_case_spaces_comments_and_bom_are_tolerated(self):
+        for text in ("on\n", "  On  \r\n", "# commento\n\nON\n", "\ufeffON\n"):
+            with self.subTest(text=text):
+                self.set_switch(text)
+                self.assertEqual(self.gate(self.good())["per_asset"]["BTC"]["tradable_regime"],
+                                 "range")
+        self.set_switch("# nota in testa\noff\n# commento\nmotivo\n")
+        res = self.gate(self.good())
+        self.assert_all_null(res, "kill_switch")
+        self.assertEqual(res["per_asset"]["BTC"]["detail"], "motivo")
+
+    def test_notifies_only_on_transitions(self):
+        seen = []
+        for text in ("ON", "OFF", "OFF", "ACCESO", "ACCESO", "ON", "ON"):
+            self.set_switch(text + "\n")
+            seen.append(self.gate(self.good())["notifications"])
+        self.assertEqual(seen[0], [])
+        self.assertEqual(len(seen[1]), 1)
+        self.assertIn("OFF", seen[1][0])
+        self.assertEqual(seen[2], [])                          # resta spento: silenzio
+        self.assertEqual(len(seen[3]), 1)                      # OFF -> illeggibile: nuovo avviso
+        self.assertIn("illeggibile", seen[3][0])
+        self.assertEqual(seen[4], [])
+        self.assertEqual(len(seen[5]), 1)                      # ripresa
+        self.assertIn("ON", seen[5][0])
+        self.assertEqual(seen[6], [])
+
+    def test_off_notifies_even_if_the_previous_run_is_unreadable(self):
+        (self.tmp / "logs").mkdir()
+        (self.tmp / rg.RUNS_LOG).write_text("non json\n")
+        self.set_switch("OFF\n")
+        self.assertEqual(len(self.gate(self.good())["notifications"]), 1)
+
+    def test_resume_note_comes_before_the_detector_notifications(self):
+        self.set_switch("OFF\n")
+        self.gate(self.good())
+        self.set_switch("ON\n")
+        res = self.gate(self.emit(payload({a: ok_entry() for a in rg.ASSETS},
+                                          notifications=["dal detector"])))
+        self.assertEqual(len(res["notifications"]), 2)
+        self.assertIn("ON", res["notifications"][0])
+        self.assertEqual(res["notifications"][1], "dal detector")
+
+    def test_telemetry_chain_continues_through_the_switch(self):
+        for text in ("ON", "OFF", "ON"):
+            self.set_switch(text + "\n")
+            self.gate(self.good())
+        lines = [json.loads(l) for l in (self.tmp / rg.RUNS_LOG).read_text().splitlines()]
+        self.assertEqual([l["outcome"] for l in lines], ["ok", "kill_switch", "ok"])
+        self.assertIsNone(lines[0]["prev_run_ts"])
+        self.assertEqual(lines[1]["prev_run_ts"], lines[0]["ts"])
+        self.assertEqual(lines[2]["prev_run_ts"], lines[1]["ts"])
+
+    def test_gate_error_keeps_the_telemetry_chain(self):
+        self.gate(self.good())
+        with mock.patch.object(rg, "read_switch", side_effect=MemoryError("finta")):
+            res = rg.get_market_regime(base=self.tmp)
+        self.assert_all_null(res, "gate_error")
+        lines = [json.loads(l) for l in (self.tmp / rg.RUNS_LOG).read_text().splitlines()]
+        self.assertEqual(lines[1]["prev_run_ts"], lines[0]["ts"])
+
+    def test_committed_switch_file_is_well_formed(self):
+        # Il file nel repo deve dire ON o OFF: un file malformato spegnerebbe il
+        # trading per sbaglio. (Non si pretende ON: OFF e' uno stato legittimo.)
+        reason, _ = rg.read_switch(Path(__file__).parent / rg.SWITCH_FILE)
+        self.assertIn(reason, (None, "kill_switch"))
 
 
 if __name__ == "__main__":

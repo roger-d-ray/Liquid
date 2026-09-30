@@ -25,6 +25,10 @@ Garanzie
   esito, tempo, verdetti, notifiche, e il timestamp della run PRECEDENTE trovata
   nel file — la prova, run dopo run, che il log persiste tra un container e
   l'altro.
+- Interruttore di emergenza (ops/new_openings.txt, DECISIONS.md §15): se la sua
+  prima riga non e' ON, tutti gli asset sono null e il detector non parte
+  nemmeno. Serve a fermare le nuove aperture senza toccare il prompt della
+  routine, che solo il proprietario puo' modificare.
 """
 
 from __future__ import annotations
@@ -44,6 +48,8 @@ DETECTOR_DEADLINE_SECONDS = 20.0
 HARD_TIMEOUT_SECONDS = 25.0
 RUNS_LOG = Path("logs") / "regime_runs.jsonl"
 SILENCE_LOG = Path("logs") / "regime_silence.jsonl"
+SWITCH_FILE = Path("ops") / "new_openings.txt"
+SWITCH_OUTCOMES = ("kill_switch", "kill_switch_unreadable")
 
 
 def _now() -> datetime:
@@ -126,13 +132,61 @@ def _failure_notifications(base: Path, per_asset: dict, now: datetime) -> tuple[
                 f"questo ciclo. Gestione posizioni aperte invariata."], str(exc)
 
 
-def _last_run_ts(path: Path) -> str | None:
+def read_switch(path: Path) -> tuple[str | None, str | None]:
+    """Interruttore di emergenza: (None, None) se le nuove aperture sono permesse,
+    altrimenti (reason, detail).
+
+    Fail-closed: le aperture le permette SOLO "ON" come prima riga significativa
+    (maiuscole o minuscole; le righe che iniziano con # sono commenti). "OFF" e'
+    lo spegnimento voluto, e le righe successive sono la nota per Telegram. File
+    assente, illeggibile o con qualunque altro contenuto spegne comunque, con una
+    reason diversa: un refuso fatto in emergenza non deve lasciare acceso.
+    """
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        return "kill_switch_unreadable", f"{SWITCH_FILE.as_posix()} illeggibile ({type(exc).__name__})"
+    lines = [ln.strip() for ln in text.splitlines()
+             if ln.strip() and not ln.strip().startswith("#")]
+    word = lines[0].upper() if lines else ""
+    if word == "ON":
+        return None, None
+    if word == "OFF":
+        return "kill_switch", " ".join(lines[1:])[:300] or "nessuna nota"
+    return "kill_switch_unreadable", (f"prima riga di {SWITCH_FILE.as_posix()} = "
+                                      f"{(lines[0] if lines else '')[:40]!r}, attesi ON o OFF")
+
+
+def _switch_notifications(reason: str | None, detail: str | None,
+                          prev_outcome: str | None) -> list[str]:
+    """Solo sulle transizioni, come il registro dei silenzi: un interruttore che
+    resta spento non manda un messaggio a ogni run. Se la run precedente non e'
+    leggibile, lo spegnimento si notifica comunque (meglio un messaggio in piu')."""
+    if reason is None:
+        if prev_outcome in SWITCH_OUTCOMES:
+            return ["▶️ Interruttore di emergenza su ON: le nuove aperture tornano "
+                    "a essere decise dal regime detector."]
+        return []
+    if reason == prev_outcome:
+        return []
+    if reason == "kill_switch":
+        return [f"⏸️ Interruttore di emergenza su OFF: nessuna nuova apertura su "
+                f"{'/'.join(ASSETS)} finché non torna ON.\nNota: {detail}\n"
+                f"Gestione posizioni aperte invariata."]
+    return [f"🛑 Interruttore di emergenza illeggibile ({detail}): nuove aperture "
+            f"sospese per sicurezza. Per riattivarle la prima riga di "
+            f"{SWITCH_FILE.as_posix()} deve essere ON.\n"
+            f"Gestione posizioni aperte invariata."]
+
+
+def _last_run(path: Path) -> dict | None:
     try:
         for line in reversed(path.read_text(encoding="utf-8").splitlines()):
             line = line.strip()
             if line:
-                return json.loads(line).get("ts")
-    except (OSError, ValueError, AttributeError):
+                run = json.loads(line)
+                return run if isinstance(run, dict) else None
+    except (OSError, ValueError):
         return None
     return None
 
@@ -147,31 +201,47 @@ def get_market_regime(*, base: Path = HERE, python: str = sys.executable,
     """
     now = _now()
     telemetry = {"ts": now.isoformat()}
+    prev = None
     try:
-        payload, outcome, detail, rc, elapsed = run_detector(
-            python=python, script=script, timeout=timeout, deadline=deadline)
-        per_asset, notifications = {}, []
-        if outcome == "ok":
-            if not (isinstance(payload, dict) and isinstance(payload.get("assets"), dict)):
-                outcome, detail = "invalid_output", "struttura di output non riconosciuta"
-            else:
-                for asset in ASSETS:
-                    verdict, why = _validate_entry(payload["assets"].get(asset))
-                    per_asset[asset] = verdict or null_verdict("detector_output_invalid", why)
-                notifications = [n for n in payload.get("notifications") or []
-                                 if isinstance(n, str)]
-                telemetry["register_events_loaded"] = payload.get("register_events_loaded")
-                if payload.get("register_error"):
-                    telemetry["register_error"] = payload["register_error"]
-                if payload.get("integrity_ok") is False:
-                    telemetry["integrity_errors"] = payload.get("integrity_errors")
-        if outcome != "ok":
-            per_asset = {a: null_verdict(f"detector_{outcome}", detail) for a in ASSETS}
-            notifications, reg_err = _failure_notifications(base, per_asset, now)
-            if reg_err:
-                telemetry["register_error"] = reg_err
-        telemetry.update({"outcome": outcome, "exit_code": rc,
-                          "elapsed_s": round(elapsed, 3)})
+        prev = _last_run(base / RUNS_LOG)
+        switch_reason, switch_detail = read_switch(base / SWITCH_FILE)
+        switch_notes = _switch_notifications(switch_reason, switch_detail,
+                                             (prev or {}).get("outcome"))
+        if switch_reason:
+            # Il detector non parte: l'interruttore deve funzionare anche quando il
+            # problema e' proprio il detector. Il registro dei silenzi resta fuori:
+            # uno spegnimento voluto non e' un buco della fonte e non consuma il
+            # budget del 5% (DECISIONS.md §4).
+            per_asset = {a: null_verdict(switch_reason, switch_detail) for a in ASSETS}
+            notifications = switch_notes
+            telemetry.update({"outcome": switch_reason, "exit_code": None,
+                              "elapsed_s": 0.0, "detail": switch_detail})
+        else:
+            payload, outcome, detail, rc, elapsed = run_detector(
+                python=python, script=script, timeout=timeout, deadline=deadline)
+            per_asset, notifications = {}, []
+            if outcome == "ok":
+                if not (isinstance(payload, dict) and isinstance(payload.get("assets"), dict)):
+                    outcome, detail = "invalid_output", "struttura di output non riconosciuta"
+                else:
+                    for asset in ASSETS:
+                        verdict, why = _validate_entry(payload["assets"].get(asset))
+                        per_asset[asset] = verdict or null_verdict("detector_output_invalid", why)
+                    notifications = [n for n in payload.get("notifications") or []
+                                     if isinstance(n, str)]
+                    telemetry["register_events_loaded"] = payload.get("register_events_loaded")
+                    if payload.get("register_error"):
+                        telemetry["register_error"] = payload["register_error"]
+                    if payload.get("integrity_ok") is False:
+                        telemetry["integrity_errors"] = payload.get("integrity_errors")
+            if outcome != "ok":
+                per_asset = {a: null_verdict(f"detector_{outcome}", detail) for a in ASSETS}
+                notifications, reg_err = _failure_notifications(base, per_asset, now)
+                if reg_err:
+                    telemetry["register_error"] = reg_err
+            notifications = switch_notes + notifications
+            telemetry.update({"outcome": outcome, "exit_code": rc,
+                              "elapsed_s": round(elapsed, 3)})
     except Exception as exc:  # noqa: BLE001 - ultima cintura: mai un crash
         per_asset = {a: null_verdict("gate_error", f"{type(exc).__name__}: {exc}")
                      for a in ASSETS}
@@ -186,7 +256,7 @@ def get_market_regime(*, base: Path = HERE, python: str = sys.executable,
     if write_telemetry:
         try:
             runs = base / RUNS_LOG
-            telemetry["prev_run_ts"] = _last_run_ts(runs)
+            telemetry["prev_run_ts"] = (prev or {}).get("ts")   # letta a inizio run
             runs.parent.mkdir(parents=True, exist_ok=True)
             with runs.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(telemetry, ensure_ascii=False) + "\n")
