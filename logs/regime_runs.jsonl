@@ -1,1 +1,2 @@
 {"ts": "2026-09-30T15:11:43.424857+00:00", "register_events_loaded": 0, "outcome": "ok", "exit_code": 0, "elapsed_s": 1.002, "assets": {"BTC": "trend", "ETH": "range", "SOL": "range"}, "notifications": 0, "prev_run_ts": null}
+{"ts": "2026-09-30T17:10:28.992338+00:00", "register_events_loaded": 0, "outcome": "ok", "exit_code": 0, "elapsed_s": 0.979, "assets": {"BTC": "range", "ETH": "range", "SOL": "range"}, "notifications": 0, "prev_run_ts": "2026-09-30T15:11:43.424857+00:00"}
