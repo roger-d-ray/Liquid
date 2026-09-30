@@ -602,3 +602,4 @@
 {"timestamp": "2026-09-30T13:14:48Z", "result": "no_setup"}
 {"timestamp": "2026-09-30T15:12:19.215132+00:00", "result": "no_setup"}
 {"timestamp": "2026-09-30T17:10:45.465223+00:00", "result": "no_setup"}
+{"timestamp": "2026-09-30T19:11:27.001242+00:00", "result": "no_setup", "regime": {"BTC": "range", "ETH": "range", "SOL": "range"}, "note": "no confirmed support rejection; BTC mid-range"}
