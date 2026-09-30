@@ -171,6 +171,11 @@ ricevi un **verdetto già deciso**, non un numero da interpretare.
   comportati come prima (notifica e fermati).
 - `regime_detector` (campo di primo livello) è telemetria per la verifica
   tecnica: non entra nelle decisioni.
+- **Interruttore di emergenza.** `reason` = `kill_switch` o
+  `kill_switch_unreadable` significa che le nuove aperture sono state spente a
+  mano con `ops/new_openings.txt`: vale la stessa regola di ogni `null`, cioè
+  nessuna nuova apertura, con la protezione invariata. La routine non modifica
+  **mai** quel file e non prova a "riaccenderlo".
 
 ## Pipeline unica (STEP 2→7) — `propose_pipeline.py` (anti-stale)
 

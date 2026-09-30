@@ -720,6 +720,69 @@ agire solo sul codice, non sul prompt. Per questo un ritorno delegato **non
 riporta il vecchio trading**: porta il bot a "nessuna nuova apertura", con la
 protezione intatta. Il revert del codice, fatto da solo, lascia la routine ferma
 allo STEP 2 con una notifica a ogni run finché il proprietario non incolla il
-prompt vecchio. Una variante più silenziosa, un interruttore nel codice che
-rende `null` tutti gli asset lasciando girare il resto, **non esiste ancora**:
-è da decidere col proprietario, se serve.
+prompt vecchio. La via preferita per un ritorno delegato è quindi l'interruttore
+di emergenza (§15): stesso effetto sulle aperture, ma il resto della routine
+continua a girare. Il revert del codice resta per i guasti che l'interruttore
+non copre, cioè quando è il codice di `market_summary.py` o del gate a rompere
+la routine.
+
+**Attivazione completata, 30/09/2026.** Il proprietario ha incollato il prompt
+alle 14:45 UTC. Il testo salvato, trascritto da `get_trigger`, coincide al byte
+con `ops/routine_prompt_regime.txt` (SHA-256 `33fb8965…`). Merge di #3 alle 14:48
+UTC (`814a07e`). La prima run con il detector acceso è quella delle 15:08 UTC.
+Nota: nello stesso salvataggio il modello della routine è passato da
+`claude-opus-4-8` a `claude-opus-5-5`. Non faceva parte del diff approvato:
+segnalato al proprietario.
+
+## 15. Interruttore di emergenza delle nuove aperture
+
+**Perché.** Il prompt della routine lo modifica solo il proprietario (§14). Serve
+un modo di spegnere le nuove aperture senza toccarlo, che possano usare sia il
+proprietario (anche dal telefono) sia Claude su delega.
+
+**Come funziona.** Il file `ops/new_openings.txt` su `main` controlla le nuove
+aperture:
+
+| Prima riga significativa | Effetto |
+|---|---|
+| `ON` | normale: decide il regime detector |
+| `OFF` | tutti gli asset `null` con `reason: kill_switch` |
+| qualunque altra cosa, file assente o illeggibile | tutti gli asset `null` con `reason: kill_switch_unreadable` |
+
+Le righe che iniziano con `#` sono commenti. Maiuscole, minuscole, spazi e BOM
+sono tollerati. Le righe dopo `OFF` diventano la nota del messaggio Telegram.
+
+**Scelte e motivi.**
+- **Un file nel repo, non una variabile d'ambiente.** Le variabili d'ambiente
+  della routine le cambia solo il proprietario. Un file su `main` lo cambiano
+  sia lui, dall'editor web di GitHub, sia Claude, con una PR più il merge. La
+  routine clona `main` a ogni run, quindi l'effetto parte dalla prima run
+  successiva al commit; una run già in corso non lo vede.
+- **Fail-closed.** Solo `ON` accende. Un refuso fatto in emergenza deve spegnere,
+  non lasciare acceso per sbaglio. Anche `OFF - manutenzione` sulla stessa riga
+  spegne, con la reason "illeggibile" e un messaggio che spiega come riaccendere.
+- **Il detector non parte nemmeno.** L'interruttore deve funzionare proprio
+  quando il problema è il detector (per esempio si blocca o dà verdetti strani).
+- **Il registro dei silenzi resta fuori.** Uno spegnimento voluto non è un buco
+  della fonte, quindi non consuma il budget del 5% (§4), che serve a misurare
+  l'invecchiamento del modello. Limite noto: se un asset era già in silenzio
+  quando si spegne, quel silenzio resta aperto nel registro per tutta la durata
+  dello spegnimento e si chiude alla ripresa.
+- **Notifiche solo sulle transizioni**, come per i silenzi: una allo spegnimento,
+  una se il motivo cambia (da `OFF` a illeggibile), una alla ripresa. Uno
+  spegnimento che dura non manda un messaggio a ogni run. Lo stato precedente
+  si legge dall'ultima riga di `logs/regime_runs.jsonl`: se non è leggibile, lo
+  spegnimento viene notificato comunque.
+- **Telemetria.** `outcome` = `kill_switch` o `kill_switch_unreadable`; la catena
+  `prev_run_ts` continua anche durante lo spegnimento.
+- **Cosa non tocca.** Il prompt non cambia: un `null`, qualunque sia la
+  `reason`, vieta già le aperture. In `CLAUDE.md` c'è solo una riga che spiega
+  le due reason e vieta alla routine di modificare il file. Non tocca nemmeno lo STEP 1: il gate si chiama
+  solo nello STEP 2, dopo la protezione. Il detector lanciato a mano da riga di
+  comando non legge l'interruttore: l'interruttore vive nel gate, cioè nel punto
+  che usa la routine.
+
+**Verifica.** 10 test in `test_regime_gate.py` (`KillSwitchTest`). Mutation test:
+15 mutanti su 15 uccisi. Un sedicesimo mutante era sopravvissuto: colpiva una
+rilettura di riserva di `prev_run_ts` che non scattava in nessun caso realistico.
+Quel codice è stato tolto invece di piegare un test per colpirlo.
