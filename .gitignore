@@ -9,6 +9,11 @@ run_input.json
 run_result.json
 pipeline_stdout.log
 pipeline_bg.log
+proposal.json
+launch_pipeline.py
+
+# Per-run agent scratch working dir
+scratch_run/
 
 # Regime-detection training area: lo storico pesante e gli artefatti intermedi
 # di training restano LOCALI. In git entrano solo il modello esportato, i suoi
