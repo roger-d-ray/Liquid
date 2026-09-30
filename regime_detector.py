@@ -34,10 +34,33 @@ Il registro e' uno strumento di OSSERVAZIONE: la decisione fail-closed non
 dipende mai da lui. Se il push fallisce e il registro si perde, il caso peggiore
 e' una notifica ripetuta, non un trade sbagliato.
 
+Contratto di output (per asset, SEMPRE presente per BTC/ETH/SOL)
+-----------------------------------------------------------------
+    tradable_regime   "range" | "trend" | null   <- l'UNICO campo su cui si decide
+    state             stato del modello, anche se sotto soglia (diagnostico)
+    confidence        posteriori filtrata dello stato (diagnostica)
+    reason            null se tradable; altrimenti il codice del perche' no:
+                      below_confidence_threshold, insufficient_history,
+                      stale_data, stitch_error, source_unavailable,
+                      detector_deadline, insufficient_feature_rows,
+                      unlabelled_state, integrity_failed, no_model, detector_error
+    detail            spiegazione leggibile di reason
+
+La soglia di confidence (metadati: fail_safe.min_confidence, DECISIONS.md §10)
+la applica QUESTO script: chi legge riceve un verdetto, non un numero da
+confrontare. Confidence sotto soglia NON e' un silenzio del detector (lo stato
+c'e', e' solo incerto): non entra nel registro dei silenzi — vedi update_register.
+
+Tempo: budget interno (default 20s) applicato iniettando in regime_source un
+http_get e uno sleep che rispettano la scadenza — regime_source.py, modulo
+hashato, non viene modificato. Nessuna eccezione esce da run(): ogni asset
+fallisce per conto suo, con reason.
+
 Uso:
     python regime_detector.py            # JSON su stdout
     python regime_detector.py --asset BTC
     python regime_detector.py --no-register   # non scrive il registro (test)
+    python regime_detector.py --deadline-seconds 20
 """
 
 from __future__ import annotations
@@ -47,6 +70,8 @@ import hashlib
 import json
 import sys
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -64,6 +89,49 @@ SCHEMA_VERSION = 1
 # Sorveglianza del budget di silenzio (DECISIONS.md §4)
 SILENCE_WINDOW_DAYS = 90
 SILENCE_BUDGET_PCT = 5.0
+
+DEFAULT_ASSETS = ("BTC", "ETH", "SOL")
+DEFAULT_DEADLINE_SECONDS = 20.0
+MIN_ASSET_BUDGET_SECONDS = 2.0     # sotto, non si inizia nemmeno l'asset
+
+
+class DeadlineExceeded(Exception):
+    """Budget di tempo esaurito. Volutamente NON un OSError: regime_source lo
+    classifica come errore non transitorio e rinuncia subito, senza retry."""
+
+
+def deadline_http_get(deadline: float):
+    """http_get per regime_source che non supera la scadenza (time.monotonic()).
+
+    Replica il trasporto di regime_source.default_http_get (stesso header, stessa
+    normalizzazione degli errori HTTP) con timeout ridotto al tempo residuo. Il
+    parsing delle righe resta in regime_source: qui c'e' solo trasporto.
+    """
+    def http_get(url: str):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.5:
+            raise DeadlineExceeded("budget di tempo del detector esaurito")
+        req = urllib.request.Request(url, headers={"User-Agent": "liquid-bot/1.0"})
+        try:
+            with urllib.request.urlopen(
+                    req, timeout=min(rs.HTTP_TIMEOUT_SECONDS, remaining)) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            raise rs.HttpStatusError(exc.code, str(exc.reason)) from exc
+    return http_get
+
+
+def deadline_sleep(deadline: float):
+    """Sleep che non va oltre la scadenza: la richiesta successiva poi rinuncia."""
+    def sleep(seconds: float) -> None:
+        time.sleep(max(0.0, min(seconds, deadline - time.monotonic())))
+    return sleep
+
+
+def _silent(reason: str, detail: str, **extra) -> dict:
+    """Nessun regime: ne' stato ne' verdetto."""
+    return {"tradable_regime": None, "state": None, "confidence": None,
+            "reason": reason, "detail": detail, **extra}
 
 
 def _now() -> datetime:
@@ -102,6 +170,16 @@ def verify_integrity(base: Path = HERE) -> tuple[dict | None, dict[str, dict], l
 
     if meta.get("schema_version") != SCHEMA_VERSION:
         errors.append(f"schema metadati {meta.get('schema_version')}, atteso {SCHEMA_VERSION}")
+
+    # Le soglie fail-safe DEVONO esserci: mai un default silenzioso, soprattutto
+    # sulla soglia di confidence (senza, ogni stato diventerebbe operativo).
+    fs = meta.get("fail_safe") or {}
+    for key in ("min_feature_rows", "min_contiguous_bars", "target_contiguous_bars"):
+        if not isinstance(fs.get(key), int) or fs[key] <= 0:
+            errors.append(f"fail_safe.{key} mancante o non valido")
+    mc = fs.get("min_confidence")
+    if not isinstance(mc, (int, float)) or isinstance(mc, bool) or not 0.5 < mc <= 1.0:
+        errors.append(f"fail_safe.min_confidence mancante o fuori da (0,5 ; 1]: {mc!r}")
 
     # Il codice e' quello con cui il modello e' stato addestrato?
     for module, expected in (meta.get("modules") or {}).items():
@@ -176,7 +254,8 @@ def feature_rows(bars: list[dict]) -> list[list[float]]:
 
 
 def _recovery_estimate(asset: str, min_bars: int, target_bars: int,
-                       now: float | None = None) -> dict | None:
+                       now: float | None = None, http_get=None,
+                       sleep=None) -> dict | None:
     """Stima quando ripartira' il regime dopo un buco della fonte.
 
     Diagnostica BEST-EFFORT, eseguita solo quando siamo GIA' in rifiuto: misura
@@ -187,7 +266,8 @@ def _recovery_estimate(asset: str, min_bars: int, target_bars: int,
     try:
         end = rs.last_closed_open_time(clock)
         first = end - (target_bars - 1) * rs.GRANULARITY_SECONDS
-        collected, _ = rs.fetch_range(asset, first, end)
+        kwargs = {k: v for k, v in (("http_get", http_get), ("sleep", sleep)) if v}
+        collected, _ = rs.fetch_range(asset, first, end, **kwargs)
     except Exception:
         return None
     tail, t = 0, end
@@ -207,49 +287,59 @@ def _recovery_estimate(asset: str, min_bars: int, target_bars: int,
 
 
 def detect_asset(asset: str, model: dict, fail_safe: dict,
-                 now: float | None = None) -> dict:
-    """Regime per un asset, oppure assenza di regime con causa strutturata.
+                 now: float | None = None, http_get=None, sleep=None) -> dict:
+    """Verdetto per un asset: tradable_regime, oppure null con reason.
 
-    ``now`` (epoch secondi) esiste per rendere il risultato deterministico nei
-    test: in produzione resta None e si usa l'orologio di sistema.
+    ``now`` (epoch secondi) rende il risultato deterministico nei test; in
+    produzione run() passa l'istante di inizio run. ``http_get``/``sleep``
+    arrivano da run() gia' vincolati alla scadenza.
     """
     min_bars = fail_safe["min_contiguous_bars"]
     target = fail_safe["target_contiguous_bars"]
     min_rows = fail_safe["min_feature_rows"]
+    threshold = fail_safe["min_confidence"]
+    io = {k: v for k, v in (("http_get", http_get), ("sleep", sleep)) if v}
     try:
         bars = rs.fetch_recent_bars(asset, min_bars=min_bars, target_bars=target,
-                                    now=now)
+                                    now=now, **io)
     except rs.InsufficientHistory as exc:
-        out = {"state": None, "code": "insufficient_history", "reason": str(exc)}
-        est = _recovery_estimate(asset, min_bars, target, now=now)
+        out = _silent("insufficient_history", str(exc))
+        est = _recovery_estimate(asset, min_bars, target, now=now, **io)
         if est:
             out.update(est)
         return out
     except rs.StaleData as exc:
-        return {"state": None, "code": "stale_data", "reason": str(exc)}
+        return _silent("stale_data", str(exc))
     except rs.StitchError as exc:
-        return {"state": None, "code": "stitch_error", "reason": str(exc)}
+        return _silent("stitch_error", str(exc))
     except rs.SourceError as exc:
-        return {"state": None, "code": "source_unavailable", "reason": str(exc)}
+        if isinstance(exc.__cause__, DeadlineExceeded):
+            return _silent("detector_deadline", str(exc))
+        return _silent("source_unavailable", str(exc))
 
     rows = feature_rows(bars)
     if len(rows) < min_rows:
-        return {"state": None, "code": "insufficient_feature_rows",
-                "reason": f"{len(rows)} righe di feature, minimo {min_rows}"}
+        return _silent("insufficient_feature_rows",
+                       f"{len(rows)} righe di feature, minimo {min_rows}")
 
     # Posteriori FILTRATA (forward): mai Viterbi, che userebbe il futuro.
     result = regime_hmm.predict_regime(model, rows)
     if result["label"] is None:
-        return {"state": None, "code": "unlabelled_state",
-                "reason": f"stato {result['state']} senza etichetta"}
+        return _silent("unlabelled_state", f"stato {result['state']} senza etichetta")
     last_open = bars[-1]["open_time_ms"]
-    return {
-        "state": result["label"],
-        "confidence": result["confidence"],
+    info = {
         "as_of": _iso(datetime.fromtimestamp(last_open / 1000, tz=timezone.utc)),
         "bars_used": len(bars),
         "feature_rows": len(rows),
+        "min_confidence": threshold,
     }
+    confidence = result["confidence"]
+    if confidence >= threshold:
+        return {"tradable_regime": result["label"], "state": result["label"],
+                "confidence": confidence, "reason": None, "detail": None, **info}
+    return {"tradable_regime": None, "state": result["label"], "confidence": confidence,
+            "reason": "below_confidence_threshold",
+            "detail": f"confidence {confidence:.4f} sotto la soglia {threshold}", **info}
 
 
 # ── Registro dei silenzi ────────────────────────────────────────────────────
@@ -263,8 +353,19 @@ class SilenceRegister:
     def __init__(self, path: Path = REGISTER_PATH):
         self.path = path
         self.events: list[dict] = []
+        self.load_error: str | None = None
+        text = ""
         if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
+            # Un registro illeggibile (permessi, byte corrotti, percorso sbagliato)
+            # diventa un registro VUOTO con errore segnalato: il detector non deve
+            # mai cadere per il registro, che osserva e non decide. Costo: al
+            # peggio una notifica ripetuta.
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                self.load_error = f"registro illeggibile: {exc}"
+        if text:
+            for line in text.splitlines():
                 line = line.strip()
                 if not line:
                     continue
@@ -344,18 +445,24 @@ def update_register(register: SilenceRegister, asset: str, result: dict,
     non notifica nulla, cosi' non si riceve un messaggio ogni ora.
     """
     notes: list[str] = []
+    # Silenzio = NESSUNO stato (fonte, integrita', tempo...). Una confidence sotto
+    # soglia NON e' silenzio: lo stato c'e', e' solo incerto, e capita nel 15-18%
+    # delle ore concentrato sulle transizioni. Contarla qui significherebbe
+    # notificare a ogni cambio di regime e sforare subito il budget del 5%, che e'
+    # pensato per i buchi della fonte (DECISIONS.md §4, §10).
     silent_now = result.get("state") is None
     was_silent = register.is_silent(asset)
 
     if silent_now and not was_silent:
         event = {"ts": _iso(now), "asset": asset, "event": "silence_start",
-                 "code": result.get("code"), "reason": result.get("reason")}
+                 "reason": result.get("reason"), "detail": result.get("detail")}
         for key in ("expected_recovery", "contiguous_bars", "bars_missing", "gap_ends_at"):
             if key in result:
                 event[key] = result[key]
         register.append(event)
-        msg = (f"🔇 Regime non disponibile — {asset}\n"
-               f"Causa: {result.get('code')} — {result.get('reason')}")
+        icon = "🛑" if result.get("reason") == "integrity_failed" else "🔇"
+        msg = (f"{icon} Regime non disponibile — {asset}\n"
+               f"Causa: {result.get('reason')} — {result.get('detail')}")
         if result.get("gap_ends_at"):
             msg += f"\nBuco della fonte fino a: {result['gap_ends_at']}"
         if result.get("expected_recovery"):
@@ -365,8 +472,10 @@ def update_register(register: SilenceRegister, asset: str, result: dict,
         notes.append(msg)
     elif not silent_now and was_silent:
         register.append({"ts": _iso(now), "asset": asset, "event": "silence_end"})
+        tail = ("" if result.get("tradable_regime")
+                else " — sotto soglia: per ora nessuna nuova apertura")
         notes.append(f"🔊 Regime di nuovo disponibile — {asset}: "
-                     f"{result['state']} (confidence {result['confidence']:.2f})")
+                     f"{result['state']} (confidence {result['confidence']:.2f}){tail}")
 
     # Budget di silenzio su finestra mobile: una notifica al superamento, una al rientro.
     pct = register.silence_fraction(asset, now)
@@ -386,36 +495,60 @@ def update_register(register: SilenceRegister, asset: str, result: dict,
 
 # ── Orchestrazione ──────────────────────────────────────────────────────────
 def run(assets: list[str] | None = None, *, use_register: bool = True,
-        base: Path = HERE) -> dict:
+        base: Path = HERE, deadline_seconds: float = DEFAULT_DEADLINE_SECONDS,
+        http_get=None, sleep=None) -> dict:
+    """Esegue il detector. Non solleva: ogni problema diventa una reason.
+
+    Integrita' fallita -> ogni asset null con reason integrity_failed e NESSUNA
+    chiamata di rete. Anche questo passa dal registro: si notifica all'inizio e
+    alla ripresa, non a ogni run.
+    """
+    t0 = time.monotonic()
+    deadline = t0 + deadline_seconds
     now = _now()
     meta, models, errors = verify_integrity(base)
     out = {"schema_version": SCHEMA_VERSION, "generated_at": _iso(now),
-           "assets": {}, "notifications": [], "integrity_ok": not errors}
-
+           "assets": {}, "notifications": [], "integrity_ok": not errors,
+           "min_confidence": ((meta or {}).get("fail_safe") or {}).get("min_confidence")}
     if errors:
-        # Nessuna chiamata di rete: senza integrita' non c'e' niente da calcolare.
         out["integrity_errors"] = errors
-        out["notifications"].append(
-            "🛑 Regime detector fermo: verifica di integrita' fallita.\n- "
-            + "\n- ".join(errors)
-            + "\nNessun NUOVO trade basato sul regime. Gestione posizioni invariata.")
-        return out
+    hg = http_get or deadline_http_get(deadline)
+    sl = sleep or deadline_sleep(deadline)
 
-    fail_safe = meta["fail_safe"]
-    register = SilenceRegister(base / "logs" / "regime_silence.jsonl") if use_register else None
-    for asset in (assets or sorted(models)):
-        if asset not in models:
-            out["assets"][asset] = {"state": None, "code": "no_model",
-                                    "reason": f"nessun modello per {asset}"}
-            continue
-        result = detect_asset(asset, models[asset], fail_safe, now=now.timestamp())
+    register = None
+    if use_register:
+        register = SilenceRegister(base / "logs" / "regime_silence.jsonl")
+        out["register_events_loaded"] = len(register.events)
+        if register.load_error:
+            out["register_error"] = register.load_error
+
+    for asset in (assets or list(DEFAULT_ASSETS)):
+        if errors:
+            result = _silent("integrity_failed", "; ".join(errors))
+        elif asset not in models:
+            result = _silent("no_model", f"nessun modello verificato per {asset}")
+        elif deadline - time.monotonic() < MIN_ASSET_BUDGET_SECONDS:
+            result = _silent("detector_deadline",
+                             "budget di tempo esaurito prima di iniziare l'asset")
+        else:
+            try:
+                result = detect_asset(asset, models[asset], meta["fail_safe"],
+                                      now=now.timestamp(), http_get=hg, sleep=sl)
+            except Exception as exc:  # noqa: BLE001 - fail-closed per asset
+                result = _silent("detector_error", f"{type(exc).__name__}: {exc}")
         out["assets"][asset] = result
         if register is not None:
             out["notifications"].extend(update_register(register, asset, result, now))
+
     if register is not None:
-        register.flush()
+        try:
+            register.flush()
+        except OSError as exc:
+            prev = out.get("register_error")
+            out["register_error"] = (prev + " · " if prev else "") + f"registro non scritto: {exc}"
         out["silence_pct_90d"] = {a: round(register.silence_fraction(a, now), 2)
                                   for a in out["assets"]}
+    out["elapsed_seconds"] = round(time.monotonic() - t0, 3)
     return out
 
 
@@ -425,8 +558,11 @@ def main(argv=None) -> int:
                    help="limita agli asset indicati (ripetibile)")
     p.add_argument("--no-register", action="store_true",
                    help="non leggere/scrivere il registro dei silenzi")
+    p.add_argument("--deadline-seconds", type=float, default=DEFAULT_DEADLINE_SECONDS,
+                   help="budget di tempo interno (default %(default)s s)")
     args = p.parse_args(argv)
-    result = run(args.assets, use_register=not args.no_register)
+    result = run(args.assets, use_register=not args.no_register,
+                 deadline_seconds=args.deadline_seconds)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     # 1 solo se l'integrita' e' compromessa (serve un umano). Il silenzio di un
     # asset e' un esito legittimo, non un errore dello script.

@@ -52,8 +52,9 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
      quote_volume ed estimated_quote_volume. Una stima non vale come quote
      volume esatto; controlla sempre source, aggregation_method, completeness
      e quality_flags.
-2. Esegui `python market_summary.py` e applica le 3 skill al JSON emesso su
-   stdout. Questo e' l'unico input per l'analisi: non esplorare
+2. Esegui `python market_summary.py --with-regime` e applica le skill al JSON
+   emesso su stdout, **instradate da `market_regime`** (vedi sezione "Regime di
+   mercato"). Questo e' l'unico input per l'analisi: non esplorare
    `data/market_data.json` con Python inline e non assumere strutture annidate
    diverse da quelle esposte dal summary.
    - `assets[asset].signal_timeframes[tf]` contiene
@@ -122,6 +123,53 @@ Il reset paper e' disabilitato in questa routine: non chiamare mai
    - `get_portfolio()` → `portfolio.from_coinvest(gp)` → `portfolio.save_portfolio_state(snap)`.
    - **Allega SEMPRE il riepilogo portafoglio al messaggio Telegram di fine run** (quello di trade eseguito / rifiutato / "nessun setup"). Usa `portfolio.build_portfolio_message()` o una riga compatta (equity, disponibile, margine, N posizioni). Questo è il modello **push** che sostituisce il poller `/portfolio` (vedi sezione dedicata): niente processo persistente, portafoglio sempre fresco in chat.
 8. MAX 1 proposta per run (solo la migliore per confidence)
+
+## Regime di mercato — filtro vincolante di apertura
+
+`market_summary.py --with-regime` aggiunge per ogni asset
+`assets[asset].market_regime`, prodotto da `regime_detector.py` (HMM a 2 stati
+addestrato offline — motivazioni e misure in `regime-training/DECISIONS.md`).
+La soglia di confidence (0,95) e ogni controllo di integrità li applica Python:
+ricevi un **verdetto già deciso**, non un numero da interpretare.
+
+**Si decide su un solo campo: `tradable_regime`.**
+
+| `tradable_regime` | Su quell'asset, in questo ciclo |
+|---|---|
+| `"range"` | solo **range-trading** può generare un proposal |
+| `"trend"` | solo **momentum-trading** può generare un proposal |
+| `null` (qualunque `reason`) | **nessuna nuova apertura** |
+| campo assente | come `null`: **nessuna nuova apertura** |
+
+- `state`, `confidence`, `reason`, `detail` sono **diagnostici**: non usarli mai
+  per scavalcare il verdetto. `state: "range"` con `tradable_regime: null` resta
+  nessuna apertura.
+- **Non si valuta più il regime a occhio.** La classificazione range/trend è
+  sostituita da `tradable_regime`: lo Step 3 "Classify the market regime" della
+  skill range-trading e la distinzione trend vs `RANGE_OR_CHOP` dello Step 4
+  della skill momentum-trading non si rifanno sugli indicatori. Tutte le altre
+  fasi delle skill (costruzione del range e delle zone, conferme su barra chiusa,
+  piano di trade, rischio di breakout, costi, R/R) restano invariate.
+- **Il detector non dà la direzione.** Dice *se* c'è trend, non *da che parte*
+  (le sue feature non hanno segno). La direzione viene ancora dalle skill: regola
+  EMA della momentum-trading e filtro EMA50/EMA200 a 1h della trend-following,
+  che resta com'è. `tradable_regime = "trend"` senza una direzione determinabile
+  = nessun trade.
+- **Il regime non tocca mai la protezione.** Housekeeping, `manage_positions.py`,
+  modifiche SL, `intraday_exit.py` e chiusure girano sempre, con o senza regime,
+  e girano **prima** che il regime venga calcolato. Nessuna regola nuova sulle
+  posizioni aperte quando il regime cambia: sono gestite esattamente come prima.
+- **Notifiche:** se `regime_notifications` non è vuoto, invia ogni messaggio così
+  com'è con `python telegram_notify.py --message "<testo>"`. Sono già filtrate da
+  Python (inizio e fine di un silenzio, budget di silenzio): non aggiungerne altre
+  sul regime.
+- **Un guasto del regime non ferma la routine.** Timeout, crash o output invalido
+  del detector arrivano come `tradable_regime: null` con `reason`
+  (`detector_timeout`, `detector_crashed`, …), mai come errore di
+  `market_summary.py`. Se `market_summary.py` fallisce, è per i dati di mercato:
+  comportati come prima (notifica e fermati).
+- `regime_detector` (campo di primo livello) è telemetria per la verifica
+  tecnica: non entra nelle decisioni.
 
 ## Pipeline unica (STEP 2→7) — `propose_pipeline.py` (anti-stale)
 
@@ -294,7 +342,11 @@ Non includere istruzioni di reset paper nel prompt routine live.
 - In live, prima di qualunque ordine/chiusura/modifica posizione deve passare `python trading_mode.py --require-live`
 - In live deve passare anche il controllo Co-Invest: se `paper_trading_status()` o la risposta MCP indicano paper, fermati e non eseguire azioni conto
 - In live, il reset paper e' vietato: non chiamare `reset_paper_account()`
-- Le skill in skills/ sono la fonte di verità: non ignorarle mai
+- Le skill in skills/ sono la fonte di verità: non ignorarle mai — con una sola
+  eccezione: la classificazione range/trend è delegata a
+  `market_regime.tradable_regime` (sezione "Regime di mercato")
+- Nuove aperture solo con `tradable_regime` non null, e solo con la skill
+  corrispondente: `range` → range-trading, `trend` → momentum-trading
 
 ## Portafoglio su Telegram — modello PUSH (attivo) vs poller /portfolio (dormiente)
 

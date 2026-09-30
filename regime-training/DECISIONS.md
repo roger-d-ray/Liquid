@@ -467,3 +467,130 @@ Python e non l'agente — il detector espone un verdetto già deciso
 (`tradable_regime`), non una confidence da confrontare. Implementazione: step 7.
 
 **Riverifica:** a ogni retraining con `analyze_confidence.py` (§8, passo 6).
+
+---
+
+## 11. Integrazione nel bot (step 7)
+
+### Il verdetto lo decide Python
+
+`regime_detector.py` pubblica per ogni asset **`tradable_regime`**: `"range"` |
+`"trend"` | `null`. `null` porta sempre una `reason` (`below_confidence_threshold`,
+`insufficient_history`, `stale_data`, `stitch_error`, `source_unavailable`,
+`detector_deadline`, `insufficient_feature_rows`, `unlabelled_state`,
+`integrity_failed`, `no_model`, `detector_error`, `detector_timeout`,
+`detector_crashed`, `detector_invalid_output`, `detector_output_invalid`,
+`gate_error`, `gate_unavailable`). `state` e `confidence` restano visibili ma
+sono **diagnostici**: l'agente decide solo su `tradable_regime`. La soglia (0,95)
+sta nei metadati (`fail_safe.min_confidence`); se manca o è fuori da (0,5 ; 1] è
+un errore di integrità — mai un default silenzioso.
+
+### Confidence sotto soglia NON è un silenzio
+
+Lo stato c'è, è solo incerto: capita nel 15–18% delle ore, concentrato sulle
+transizioni. Contarlo nel registro dei silenzi vorrebbe dire notificare a ogni
+cambio di regime e sforare subito il budget del 5%, che è pensato per i buchi
+della fonte (§4). Il registro conta solo i periodi **senza alcuno stato**.
+
+### Il detector non dà la direzione
+
+Le feature non hanno segno (§1): il modello dice *se* c'è trend, non *da che
+parte*. La direzione resta alla regola EMA della momentum-trading e al filtro
+EMA50/EMA200 a 1h della trend-following.
+
+### Precedenza sulle skill
+
+La classificazione range/trend delle skill (Step 3 della range-trading,
+distinzione trend vs `RANGE_OR_CHOP` dello Step 4 della momentum-trading) è
+**sostituita** da `tradable_regime` e non si rifà a occhio. Tutto il resto delle
+skill resta invariato. È l'unica eccezione alla regola "le skill sono la fonte di
+verità", scritta come tale in `CLAUDE.md`. I file delle skill non sono stati
+modificati.
+
+### Mai rompere la routine
+
+- `market_summary.py --with-regime` esegue il detector tramite `regime_gate.py`
+  in un **processo separato** con timeout duro (25 s) — l'unico modo di avere
+  un tetto reale: una risoluzione DNS bloccata non rispetta i timeout dei socket.
+  Il detector ha anche un budget interno (20 s), applicato iniettando in
+  `regime_source` un trasporto HTTP e uno sleep a scadenza, senza toccare il
+  modulo hashato.
+- Timeout, crash, output non JSON, exit code inatteso, verdetto incoerente:
+  `tradable_regime: null` con `reason`. Il gate **rivalida** l'output: un
+  verdetto operativo con confidence sotto la sua soglia viene scartato.
+- Nessuna eccezione esce da `run()` del detector né da `get_market_regime()`;
+  l'exit code di `market_summary.py` dipende solo dai dati di mercato.
+- Tempo misurato end-to-end (rete reale): **~1,1 s** per il summary col regime,
+  detector ~1,0 s. Il regime si calcola allo STEP 2, **prima** di
+  `show_orderbook`: non consuma la finestra di freschezza di 30 s dell'order book.
+
+### Perché un flag (`--with-regime`) e non il comportamento di default
+
+Senza flag, `market_summary.py` è **identico al byte** alla versione precedente
+(test differenziale contro copia congelata): i test esistenti non vanno in rete
+e non scrivono nei `logs/` tracciati in git. Se la routine dimenticasse il flag,
+il campo mancherebbe, e "campo assente" vale `null` → nessuna nuova apertura:
+fail-closed anche così.
+
+### Telemetria: `logs/regime_runs.jsonl`
+
+Una riga per run: esito, exit code, tempo, verdetto per asset, notifiche, eventi
+di registro caricati, e **`prev_run_ts`**, il timestamp della riga precedente
+trovata nel file. Se il canale di persistenza funziona, ogni run vede la
+precedente: è la prova, run dopo run, che il registro sopravvive al container.
+Sincronizzato su `main` con `git_push_log.py --also`.
+
+### STEP 0 fuori portata — per costruzione
+
+Nella routine l'housekeeping (manage_positions, intraday_exit, modifiche SL,
+chiusure) gira **prima** dello STEP 2, cioè prima che il regime esista. Il regime
+non può bloccarlo nemmeno volendo (§0.1).
+
+---
+
+## 12. Dove vive la configurazione della routine
+
+**La routine non sta nel repo.** È il trigger schedulato
+`trig_01HJ3fU1mnX1qJj3ZmfkweG8` ("Trading Bot — BTC/ETH/SOL Hourly"), e il suo
+prompt contiene il flusso completo della run — incluse le chiamate a
+`market_summary.py` (STEP 2) e a **`git_push_log.py` (STEP 8)**.
+
+- **Cron:** `0 7-23/2 * * *` → una run **ogni 2 ore, dalle 07 alle 23 UTC** (9 al
+  giorno, nessuna di notte). Il nome del trigger ("Hourly") e `CLAUDE.md` ("ogni
+  60 min") non corrispondono al cron: segnalato, non corretto (non richiesto).
+- **`persist_session: false`:** ogni scatto crea una sessione nuova.
+- Il prompt **ripete** il flusso di `CLAUDE.md` in dettaglio: ogni modifica al
+  flusso va fatta **in entrambi i posti**, altrimenti le due istruzioni si
+  contraddicono. Il prompt si modifica solo mostrando prima il diff esatto e con
+  l'ok esplicito del proprietario.
+
+---
+
+## 13. Run sovrapposte — cosa risulta dai log (30/09/2026)
+
+L'ordinamento per timestamp del registro (§9) era una **precauzione teorica**,
+non una risposta a un caso osservato. Verifica sui log di `main`:
+
+- `logs/proposals.jsonl`, 601 righe (25/06 → 30/09): **0 righe fuori ordine**. I 52
+  gruppi di righe ravvicinate (< 5 min) sono tutti "proposal + un solo esito
+  finale", cioè **una sola run** che scrive più righe; nessun gruppo con due esiti.
+- 294 commit `bot: run` (27/08 → 30/09), uno per fine run: **una sola coppia**
+  entro 60 minuti — 27/08 13:12 e 13:23, il primo giorno del meccanismo di push.
+  Senza orari di inizio non si può dire se si siano sovrapposte o susseguite.
+  Nessuna fine run fuori dagli orari del cron. Prima del 27/08 compaiono righe
+  alle 10 e alle 14 UTC (inizio luglio): run lanciate a mano in sviluppo.
+- **Strutturalmente è possibile ma improbabile:** l'attesa più lunga di una run
+  è la conferma Telegram (max 30 min), lontana dalle 2 ore fra due run. Il
+  vettore realistico è **una run lanciata a mano durante una schedulata**.
+- **Nessuna protezione oggi fra container diversi:** `telegram_lock.py` è un lock
+  su file in `data/`, locale al container; due run in cloud non lo condividono.
+  Se si sovrapponessero potrebbero proporre due trade nella stessa finestra
+  (MAX 1 è per run) e contendersi `getUpdates` su Telegram (409). Non risolto:
+  segnalato.
+
+---
+
+## Domande aperte
+
+- **Il ~30% di ore escluse lontane dalle transizioni** (§10): cosa sono? Da
+  analizzare (richiesta del 30/09, non bloccante).

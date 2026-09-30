@@ -52,6 +52,12 @@ CONVERGENCE_SAFETY = 1.5            # MIN deve essere >= 1,5 x convergenza misur
 TARGET_CONTIGUOUS_BARS = rs.PAGE_BARS    # una sola richiesta per asset in live
 MIN_CONTIGUOUS_BARS = rf.FEATURE_WINDOW_BARS + MIN_FEATURE_ROWS - 1
 
+# Soglia di confidence (DECISIONS.md §10): sotto, nessun regime operativo.
+# Confermata fuori campione: ginocchio walk-forward in [0,93-0,97] su tutti e tre
+# gli asset, uguale all'in-sample in 9 casi su 9. Riverificata a ogni retraining
+# con analyze_confidence.py (DECISIONS.md §8).
+MIN_CONFIDENCE = 0.95
+
 PARITY_MAX_PROBA_DIFF = 1e-6
 PARITY_MAX_LOGLIK_DIFF = 1e-6
 META_SCHEMA_VERSION = 1
@@ -185,6 +191,7 @@ def main() -> int:
             "min_contiguous_bars": MIN_CONTIGUOUS_BARS,
             "target_contiguous_bars": TARGET_CONTIGUOUS_BARS,
             "convergence_safety_factor": CONVERGENCE_SAFETY,
+            "min_confidence": MIN_CONFIDENCE,
             "measured_on": f"modello a {N_STATES} stati (riverificato a ogni export)",
             "on_violation": "nessun regime -> nessun NUOVO trade nel ciclo; "
                             "STEP 0 (protezione posizioni) invariato",

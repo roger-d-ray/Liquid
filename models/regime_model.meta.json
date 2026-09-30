@@ -1,10 +1,11 @@
 {
   "data_source": "coinbase-exchange",
   "decisions": "regime-training/DECISIONS.md",
-  "exported_at": "2026-09-25T09:27:58.712089+00:00",
+  "exported_at": "2026-09-30T13:16:15.686407+00:00",
   "fail_safe": {
     "convergence_safety_factor": 1.5,
     "measured_on": "modello a 2 stati (riverificato a ogni export)",
+    "min_confidence": 0.95,
     "min_contiguous_bars": 249,
     "min_feature_rows": 50,
     "on_violation": "nessun regime -> nessun NUOVO trade nel ciclo; STEP 0 (protezione posizioni) invariato",
