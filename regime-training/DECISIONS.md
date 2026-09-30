@@ -610,6 +610,24 @@ non una risposta a un caso osservato. Verifica sui log di `main`:
 
 - **Il ~30% di ore escluse lontane dalle transizioni** (§10): cosa sono? Da
   analizzare (richiesta del 30/09, non bloccante).
+- **Log dei messaggi Telegram inviati** (idea del proprietario, 30/09). Oggi
+  Claude non vede Telegram: flusso di conferma e notifiche li verifica solo il
+  proprietario. Proposta: `telegram_notify.py` registra ogni invio (testo, esito,
+  risposta alle proposte) in un log pubblicato con gli altri. Da fare **solo
+  quando il prompt dovrà cambiare per un altro motivo**, perché va aggiunto a
+  STEP 8 (`--also`). Punti da valutare a quel momento:
+  - le eccezioni HTTP di Telegram contengono l'URL col token: nel log vanno solo
+    testo e codice d'esito, mai il testo dell'eccezione;
+  - i messaggi del portafoglio riportano gli importi del conto: verificare la
+    visibilità del repo prima di pubblicarli;
+  - alternativa da proporre: un elenco dei log extra in un file del repo letto
+    da `git_push_log.py`, così i log futuri non richiedono modifiche al prompt.
+    Cambia però il comportamento "identico a prima" senza argomenti, che oggi è
+    garantito da un test di identità.
+- **Pulizie rimandate** (30/09, a attivazione stabile, PR separate):
+  `stage_run.py` su `main` (script improvvisato del 05/09 con livelli di prezzo
+  scritti a mano) e i circa 600 branch `claude/…` lasciati dalle run della
+  routine.
 
 ---
 
