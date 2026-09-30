@@ -1,4 +1,5 @@
-ON
+OFF
+prova interruttore (Claude)
 # Interruttore di emergenza delle nuove aperture. Istruzioni: ops/COME_SPEGNERE.md
 # Prima riga ON  = le nuove aperture le decide il regime detector (normale).
 # Prima riga OFF = nessuna nuova apertura su BTC/ETH/SOL. Protezione, gestione
