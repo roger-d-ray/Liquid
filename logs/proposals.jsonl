@@ -606,3 +606,4 @@
 {"timestamp":"2026-09-30T21:11:27Z","result":"no_setup"}
 {"timestamp":"2026-09-30T23:11:22Z","result":"no_setup","note":"range regime all assets, price mid-range; post-flatten hour 23 UTC"}
 {"timestamp": "2026-10-01T07:11:32.091412+00:00", "result": "no_setup"}
+{"timestamp": "2026-10-01T09:11:14.735479+00:00", "result": "no_setup", "regime": {"BTC": "range", "ETH": "range", "SOL": "range"}, "note": "range-trading: price lower-third/mid of 1h bands after 07:00 UTC sell-off; net R/R < 1.2 with stops beyond support zones; 15m ADX>30 bearish DI = moderate breakout risk"}
