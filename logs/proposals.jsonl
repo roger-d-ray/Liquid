@@ -605,3 +605,4 @@
 {"timestamp": "2026-09-30T19:11:27.001242+00:00", "result": "no_setup", "regime": {"BTC": "range", "ETH": "range", "SOL": "range"}, "note": "no confirmed support rejection; BTC mid-range"}
 {"timestamp":"2026-09-30T21:11:27Z","result":"no_setup"}
 {"timestamp":"2026-09-30T23:11:22Z","result":"no_setup","note":"range regime all assets, price mid-range; post-flatten hour 23 UTC"}
+{"timestamp": "2026-10-01T07:11:32.091412+00:00", "result": "no_setup"}
