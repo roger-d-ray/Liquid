@@ -648,3 +648,4 @@
 {"timestamp": "2026-10-05T17:12:21.636603+00:00", "result": "no_setup", "notes": "BTC/SOL range regime but 1h closes below range support (breakdown); ETH tradable_regime null"}
 {"timestamp":"2026-10-05T19:11:49Z","result":"no_setup"}
 {"timestamp":"2026-10-05T21:11:39Z","result":"no_setup"}
+{"timestamp":"2026-10-05T23:11:28Z","result":"no_setup"}
