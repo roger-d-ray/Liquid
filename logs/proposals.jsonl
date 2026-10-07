@@ -662,3 +662,4 @@
 {"timestamp":"2026-10-07T09:11:28Z","result":"no_setup"}
 {"timestamp": "2026-10-07T11:12:06.953620+00:00", "result": "no_setup"}
 {"timestamp":"2026-10-07T13:11:56Z","result":"no_setup","note":"all trend regime; no 15m/1h breakout trigger; SOL 1h overextended -> WATCH"}
+{"timestamp": "2026-10-07T17:12:08.236969+00:00", "result": "no_setup", "regime": {"BTC": "trend", "ETH": "trend", "SOL": "trend"}, "notes": {"BTC": "15m pullback short trigger negated by bounce above trigger high, vol_ratio 0.33, conf~0.48", "ETH": "1h RSI 19.7 exhausted, no 15m trigger, conf~0.40", "SOL": "no trigger, conf~0.42"}}
