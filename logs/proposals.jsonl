@@ -659,3 +659,4 @@
 {"timestamp":"2026-10-06T21:11:50Z","result":"no_setup","regime":{"BTC":"range","ETH":"range","SOL":"range"},"note":"prices mid-range, no edge confirmation, low volume"}
 {"timestamp":"2026-10-06T23:11:09Z","result":"no_setup"}
 {"timestamp":"2026-10-07T07:11:39Z","result":"no_setup"}
+{"timestamp":"2026-10-07T09:11:28Z","result":"no_setup"}
