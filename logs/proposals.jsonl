@@ -668,3 +668,4 @@
 {"timestamp":"2026-10-07T23:11:12Z","result":"no_setup"}
 {"timestamp":"2026-10-08T07:11:44Z","result":"no_setup"}
 {"timestamp":"2026-10-08T09:12:01Z","result":"no_setup"}
+{"timestamp": "2026-10-08T11:12:13.718113+00:00", "result": "no_setup", "notes": "all trend; ETH/SOL extension>2.5ATR, BTC stale trigger/wide stop"}
