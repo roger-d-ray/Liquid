@@ -679,3 +679,4 @@
 {"timestamp":"2026-10-09T11:12:33Z","result":"no_setup"}
 {"timestamp":"2026-10-09T13:11:51Z","result":"no_setup"}
 {"timestamp":"2026-10-09T15:12:01Z","result":"no_setup","notes":{"BTC":"trend regime, mixed 1h EMAs, no breakout trigger","ETH":"tradable_regime null (below_confidence_threshold)","SOL":"trend regime, downtrend without pullback/breakdown trigger"}}
+{"timestamp":"2026-10-09T17:11:32Z","result":"no_setup"}
