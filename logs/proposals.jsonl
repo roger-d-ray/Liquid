@@ -703,3 +703,4 @@
 {"timestamp":"2026-10-12T07:12:01Z","result":"no_setup"}
 {"timestamp":"2026-10-12T09:11:48Z","result":"no_setup"}
 {"timestamp": "2026-10-12T11:12:08.585943+00:00", "result": "no_setup", "regime": {"BTC": "range", "ETH": "trend", "SOL": "range"}, "notes": {"BTC": "range long at support 83199-83226 not confirmed on close, 15m bearish, 1h EMA50<EMA200; conf~0.50", "ETH": "trend regime but direction conflict: 1h EMA9>21>50 bullish vs EMA50<EMA200 filter bearish, volume_ratio 0.46, MACD flat; conf~0.45", "SOL": "mid-range (38% of 109.84-113.27), no edge; conf~0.35"}}
+{"timestamp":"2026-10-12T13:13:05Z","result":"no_setup"}
