@@ -714,3 +714,4 @@
 {"timestamp":"2026-10-13T11:11:41Z","result":"no_setup"}
 {"timestamp": "2026-10-13T13:12:35.534460+00:00", "result": "no_setup", "regimes": {"BTC": "range", "ETH": "range", "SOL": "trend"}, "notes": {"BTC": "range-trading: near 15m support 83027 but lower highs (84053>83641>83370), no closed-bar rejection, vol_ratio 0.5, 1h EMA50<EMA200 -> conditional, conf ~0.48", "ETH": "range-trading: mid-range (loc ~0.4 of 2486-2520/2534) -> poor location", "SOL": "momentum-trading: downtrend bias (1h EMA stack bearish, ADX 35.8) but no breakout below low_20 105.51 and no pullback-continuation trigger (close 106.54 > prev low; 1h RSI 42.7 outside 50-60 setup) -> no trade"}}
 {"timestamp":"2026-10-13T15:11:59Z","result":"no_setup"}
+{"timestamp":"2026-10-13T17:12:15Z","result":"no_setup"}
