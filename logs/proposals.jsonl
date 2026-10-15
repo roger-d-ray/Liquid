@@ -730,3 +730,4 @@
 {"timestamp":"2026-10-14T23:10:57Z","result":"no_setup"}
 {"timestamp":"2026-10-15T07:11:33Z","result":"no_setup"}
 {"timestamp": "2026-10-15T09:11:51.229783+00:00", "result": "no_setup", "regime": {"BTC": "trend", "ETH": "trend", "SOL": null}, "notes": "momentum: no breakout/pullback trigger on 15m/1h for BTC/ETH; SOL tradable_regime null"}
+{"timestamp": "2026-10-15T11:11:29.676192+00:00", "result": "no_setup"}
