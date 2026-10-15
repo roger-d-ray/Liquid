@@ -729,3 +729,4 @@
 {"timestamp": "2026-10-14T21:13:37.017566+00:00", "result": "no_trade_unresolved", "asset": "ETH", "side": "short", "strategy": "momentum-trading", "timeframe": "15m", "confidence": 0.58, "resolution_status": "blocked", "reasons": ["execution-price dislocation is 30.19 bps (max 25.00 bps)"]}
 {"timestamp":"2026-10-14T23:10:57Z","result":"no_setup"}
 {"timestamp":"2026-10-15T07:11:33Z","result":"no_setup"}
+{"timestamp": "2026-10-15T09:11:51.229783+00:00", "result": "no_setup", "regime": {"BTC": "trend", "ETH": "trend", "SOL": null}, "notes": "momentum: no breakout/pullback trigger on 15m/1h for BTC/ETH; SOL tradable_regime null"}
