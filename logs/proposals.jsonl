@@ -740,3 +740,4 @@
 {"timestamp": "2026-10-16T07:14:14.236194+00:00", "result": "discarded_margin", "asset": "SOL", "signal": "short", "strategy": "range-trading", "confidence": 0.57, "reason": "Trade scartato: la size massima consentita rischierebbe 2.10% dell'equity, sotto il minimo 2.25% (retention 70.1%, richiesto almeno 75%)."}
 {"timestamp":"2026-10-16T09:11:57Z","result":"no_setup"}
 {"timestamp":"2026-10-16T11:14:09Z","result":"no_setup"}
+{"timestamp":"2026-10-16T13:17:39Z","result":"no_setup"}
