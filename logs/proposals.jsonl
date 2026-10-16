@@ -745,3 +745,4 @@
 {"timestamp": "2026-10-16T17:11:50.638965+00:00", "result": "no_setup"}
 {"timestamp": "2026-10-16T19:11:16.359399+00:00", "result": "no_setup", "notes": {"BTC": "trend/momentum: no close below prior 20-bar low 80705.4, no valid pullback trigger -> WATCH", "ETH": "tradable_regime null (below_confidence_threshold)", "SOL": "range: at support 102.6 but no closed-bar rejection, ADX15m 33.7 with shrinking bounces -> high breakout risk"}}
 {"timestamp": "2026-10-16T21:11:09.388417+00:00", "result": "no_setup"}
+{"timestamp":"2026-10-16T23:05:18Z","result":"no_setup","note":"23UTC flatten window, all range regime, no opening to preserve zero-overnight"}
