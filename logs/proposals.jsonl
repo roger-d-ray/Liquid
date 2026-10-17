@@ -750,3 +750,4 @@
 {"timestamp": "2026-10-17T09:05:36.516565+00:00", "result": "no_setup"}
 {"timestamp":"2026-10-17T11:05:46Z","result":"no_setup"}
 {"timestamp":"2026-10-17T13:05:29Z","result":"no_setup"}
+{"timestamp": "2026-10-17T15:04:58.152422+00:00", "result": "no_setup", "note": "regime range su BTC/ETH/SOL; prezzi a meta range 15m/1h, nessuna zona di ingresso range-trading"}
