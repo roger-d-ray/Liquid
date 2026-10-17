@@ -748,3 +748,4 @@
 {"timestamp":"2026-10-16T23:05:18Z","result":"no_setup","note":"23UTC flatten window, all range regime, no opening to preserve zero-overnight"}
 {"timestamp":"2026-10-17T07:05:28Z","result":"no_setup"}
 {"timestamp": "2026-10-17T09:05:36.516565+00:00", "result": "no_setup"}
+{"timestamp":"2026-10-17T11:05:46Z","result":"no_setup"}
