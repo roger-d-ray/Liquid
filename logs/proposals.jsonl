@@ -757,3 +757,4 @@
 {"timestamp":"2026-10-17T23:04:48Z","result":"no_setup","reason":"tradable_regime null on all assets (below_confidence_threshold)"}
 {"timestamp":"2026-10-18T07:05:30Z","result":"no_setup"}
 {"timestamp":"2026-10-18T09:04:45Z","result":"no_setup"}
+{"timestamp":"2026-10-18T11:05:01Z","result":"no_setup"}
