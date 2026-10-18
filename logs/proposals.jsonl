@@ -755,3 +755,4 @@
 {"timestamp":"2026-10-17T19:05:37Z","result":"no_setup"}
 {"timestamp": "2026-10-17T21:05:36.367398+00:00", "result": "no_setup", "regime": {"BTC": "range", "ETH": "range", "SOL": "range"}, "note": "BTC at resistance without oscillator confirmation; ETH/SOL mid-range"}
 {"timestamp":"2026-10-17T23:04:48Z","result":"no_setup","reason":"tradable_regime null on all assets (below_confidence_threshold)"}
+{"timestamp":"2026-10-18T07:05:30Z","result":"no_setup"}
