@@ -765,3 +765,4 @@
 {"timestamp": "2026-10-18T21:05:11.019010+00:00", "result": "no_setup"}
 {"timestamp": "2026-10-18T23:04:56.822432+00:00", "result": "no_setup", "reason": "flatten_window_23utc_no_new_openings", "regime": {"BTC": "range", "ETH": "trend", "SOL": null}}
 {"timestamp":"2026-10-19T07:06:10Z","result":"no_setup"}
+{"timestamp":"2026-10-19T09:04:58Z","result":"no_setup"}
