@@ -781,3 +781,4 @@
 {"timestamp":"2026-10-20T17:08:00Z","result":"no_setup","regime":{"BTC":null,"ETH":"trend","SOL":null},"note":"ETH momentum pullback_continuation 15m: close 2449.24>prior high 2445.62, RSI 63, ext 1.6 ATR, vol ratio 1.76; filtro trend-following 1h EMA50 2407<EMA200 2437 con prezzo sopra entrambe = nessun uptrend confermato -> direzione non determinabile, no-trade. BTC/SOL tradable_regime null (below_confidence_threshold)"}
 {"timestamp": "2026-10-20T19:05:11.975773+00:00", "result": "no_setup"}
 {"timestamp":"2026-10-20T21:05:08Z","result":"no_setup"}
+{"timestamp":"2026-10-20T23:05:18Z","result":"no_setup","reason":"end_of_day_flatten_window_no_new_openings","regime":{"BTC":"range","ETH":"range","SOL":"range"}}
