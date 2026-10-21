@@ -790,3 +790,4 @@
 {"timestamp": "2026-10-21T17:05:59.098633+00:00", "result": "no_setup"}
 {"timestamp":"2026-10-21T19:05:04Z","result":"no_setup"}
 {"timestamp":"2026-10-21T21:06:11Z","result":"no_setup"}
+{"timestamp": "2026-10-21T23:04:59.411881+00:00", "result": "no_setup", "reason": "flatten_window_23utc_no_new_openings", "regimes": {"BTC": "trend", "ETH": "trend", "SOL": "range"}}
