@@ -782,3 +782,4 @@
 {"timestamp": "2026-10-20T19:05:11.975773+00:00", "result": "no_setup"}
 {"timestamp":"2026-10-20T21:05:08Z","result":"no_setup"}
 {"timestamp":"2026-10-20T23:05:18Z","result":"no_setup","reason":"end_of_day_flatten_window_no_new_openings","regime":{"BTC":"range","ETH":"range","SOL":"range"}}
+{"timestamp": "2026-10-21T07:05:38.072558+00:00", "result": "no_setup"}
