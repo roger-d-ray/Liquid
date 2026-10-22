@@ -799,3 +799,4 @@
 {"timestamp":"2026-10-22T17:05:32Z","result":"no_setup","regimes":{"BTC":"trend","ETH":"trend","SOL":"trend"},"note":"breakdown 15m sotto prior low su volume (BTC vr 4.3) ma EMA50>EMA200 1h su tutti (filtro trend-following contrario allo short), RSI 1h ~26, wick di rifiuto: confidence < 0.55"}
 {"timestamp": "2026-10-22T19:05:50.657875+00:00", "result": "no_setup"}
 {"timestamp":"2026-10-22T21:05:46Z","result":"no_setup"}
+{"timestamp":"2026-10-22T23:05:12Z","result":"no_setup"}
