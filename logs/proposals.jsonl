@@ -794,3 +794,4 @@
 {"timestamp":"2026-10-22T07:07:59Z","result":"no_setup","regime":{"BTC":"trend","ETH":"range","SOL":"range"},"notes":"BTC short 15m contro filtro 1h EMA50>EMA200, ipervenduto, volume debole; ETH supporto con lower lows = breakout risk alto; SOL breakdown sotto 104.93/EMA200 1h"}
 {"timestamp": "2026-10-22T09:06:52.886707+00:00", "result": "no_setup"}
 {"timestamp":"2026-10-22T11:09:51Z","result":"no_setup"}
+{"timestamp": "2026-10-22T13:09:22.994215+00:00", "result": "no_setup", "regimes": {"BTC": "trend", "ETH": "trend", "SOL": "trend"}, "note": "momentum: no breakdown below prior 20-bar low, RSI outside pullback zone"}
