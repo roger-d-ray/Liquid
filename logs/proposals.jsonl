@@ -807,3 +807,4 @@
 {"timestamp":"2026-10-23T15:05:42Z","result":"no_setup"}
 {"timestamp":"2026-10-23T17:05:01Z","result":"no_setup","regime":{"BTC":"trend","ETH":"range","SOL":"range"},"best_confidence":0.45}
 {"timestamp":"2026-10-23T19:05:30Z","result":"no_setup"}
+{"timestamp":"2026-10-23T21:05:38Z","result":"no_setup","regime":{"BTC":"trend","ETH":"range","SOL":"range"}}
