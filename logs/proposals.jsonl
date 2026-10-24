@@ -815,3 +815,4 @@
 {"timestamp": "2026-10-24T13:05:05.797187+00:00", "result": "no_setup", "regimes": {"BTC": "trend", "ETH": "trend", "SOL": "trend"}, "note": "momentum-trading: 1h downtrend su tutti, nessun trigger short 15m/1h (close<low precedente o breakdown low_20_bars)"}
 {"timestamp":"2026-10-24T15:05:33Z","result":"no_setup","note":"trend regime all assets; 1h breakdown shorts exceed max_extension_atr 2.5 at live price -> WATCH"}
 {"timestamp":"2026-10-24T17:05:22Z","result":"no_setup"}
+{"timestamp":"2026-10-24T19:05:20Z","result":"no_setup","regime":{"BTC":"trend","ETH":"trend","SOL":"trend"},"note":"1h downtrend, 15m countertrend bounce, no momentum trigger"}
