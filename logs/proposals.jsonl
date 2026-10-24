@@ -811,3 +811,4 @@
 {"timestamp":"2026-10-23T23:05:21Z","result":"no_setup","note":"flatten window 23 UTC; BTC trend oversold breakdown, ETH/SOL range broken to downside"}
 {"timestamp": "2026-10-24T07:05:21.146708+00:00", "result": "no_setup"}
 {"timestamp":"2026-10-24T09:05:07Z","result":"no_setup","regime":{"BTC":"trend","ETH":null,"SOL":"trend"},"note":"BTC/SOL trend bearish but price at 20/55-bar lows without closed-bar breakdown, oversold 1h; no momentum entry >=0.55"}
+{"timestamp":"2026-10-24T11:04:58Z","result":"no_setup","regimes":{"BTC":"trend","ETH":null,"SOL":"trend"},"note":"momentum pullback/breakdown conditions not met on 15m/1h"}
